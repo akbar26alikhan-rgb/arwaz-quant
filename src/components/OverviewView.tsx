@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   ArrowUpRight,
   CheckCircle2,
+  Pause,
   Play,
   ShieldCheck,
   TrendingUp,
@@ -10,6 +11,7 @@ import {
 } from 'lucide-react';
 import {
   BrokerName,
+  ClosedTradeLog,
   EngineeredRow,
   MarketMeta,
   OpenPosition,
@@ -29,16 +31,32 @@ interface OverviewViewProps {
   feedSourceLabel: string;
   rows: EngineeredRow[];
   activeSignal: TradeSignal;
+  onUpdateSignal: (next: TradeSignal) => void;
   openPositions: OpenPosition[];
+  closedTrades: ClosedTradeLog[];
   riskSettings: RiskSettings;
   onUpdateRiskSettings: (next: RiskSettings) => void;
   onExecutePaperOrder: (signal: TradeSignal) => void;
   onClosePosition: (id: string) => void;
+  onUpdatePositionLevels: (
+    id: string,
+    levels: { stopLoss: number; target1: number; target2: number }
+  ) => void;
+  onSimulateTrigger: (id: string, trigger: 'SL' | 'T1' | 'T2') => void;
   onSimulateMarketTick: () => void;
+  autoExitEnabled: boolean;
+  onToggleAutoExit: (next: boolean) => void;
+  autoTickEnabled: boolean;
+  onToggleAutoTick: (next: boolean) => void;
   onNavigateTab: (tab: 'agent' | 'backtest' | 'improve') => void;
   versions: StrategyVersion[];
   activeVersion: StrategyVersion;
-  equityHistory: Array<{ label: string; strategy: number; benchmark: number; drawdownPct: number }>;
+  equityHistory: Array<{
+    label: string;
+    strategy: number;
+    benchmark: number;
+    drawdownPct: number;
+  }>;
   orderBanner: string | null;
 }
 
@@ -49,12 +67,19 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   feedSourceLabel,
   rows,
   activeSignal,
+  onUpdateSignal,
   openPositions,
+  closedTrades,
   riskSettings,
   onUpdateRiskSettings,
   onExecutePaperOrder,
   onClosePosition,
+  onSimulateTrigger,
   onSimulateMarketTick,
+  autoExitEnabled,
+  onToggleAutoExit,
+  autoTickEnabled,
+  onToggleAutoTick,
   onNavigateTab,
   versions,
   activeVersion,
@@ -64,6 +89,9 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   const [showMaFast, setShowMaFast] = useState(true);
   const [showMaSlow, setShowMaSlow] = useState(true);
   const [eqRange, setEqRange] = useState<'1M' | '3M' | '6M' | 'All'>('6M');
+  const [ledgerFilter, setLedgerFilter] = useState<
+    'all' | 'targets' | 'sl' | 'manual'
+  >('all');
 
   const latestBar = rows[rows.length - 1];
   const riskChecks = useMemo(
@@ -76,10 +104,47 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
     return openPositions.reduce((sum, pos) => {
       const diff =
         pos.side === 'BUY' ? pos.ltp - pos.entryPrice : pos.entryPrice - pos.ltp;
-      const mult = pos.symbol === 'EURUSD' ? 10000 : pos.symbol === 'XAUUSD' ? 10 : 1;
+      const mult =
+        pos.symbol === 'EURUSD' || pos.symbol === 'GBPUSD' || pos.symbol === 'AUDUSD'
+          ? 10000
+          : pos.symbol === 'XAUUSD'
+            ? 10
+            : 1;
       return sum + diff * pos.qty * mult;
     }, 0);
   }, [openPositions]);
+
+  const ledgerSummary = useMemo(() => {
+    const netPnl = closedTrades.reduce((s, t) => s + t.pnl, 0);
+    const grossProfit = closedTrades
+      .filter((t) => t.pnl > 0)
+      .reduce((s, t) => s + t.pnl, 0);
+    const grossLoss = closedTrades
+      .filter((t) => t.pnl < 0)
+      .reduce((s, t) => s + t.pnl, 0);
+    const wins = closedTrades.filter((t) => t.pnl > 0).length;
+    const winRate =
+      closedTrades.length > 0
+        ? Math.round((wins / closedTrades.length) * 1000) / 10
+        : 0;
+    return { netPnl, grossProfit, grossLoss, wins, winRate };
+  }, [closedTrades]);
+
+  const filteredLedger = useMemo(() => {
+    if (ledgerFilter === 'targets') {
+      return closedTrades.filter((t) => t.exitReason.includes('Target'));
+    }
+    if (ledgerFilter === 'sl') {
+      return closedTrades.filter((t) => t.exitReason === 'Stop Loss');
+    }
+    if (ledgerFilter === 'manual') {
+      return closedTrades.filter(
+        (t) =>
+          t.exitReason === 'Manual Close' || t.exitReason === 'Trailing Stop'
+      );
+    }
+    return closedTrades;
+  }, [closedTrades, ledgerFilter]);
 
   const filteredEquity = useMemo(() => {
     if (eqRange === '1M') return equityHistory.slice(-8);
@@ -88,34 +153,41 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
     return equityHistory;
   }, [equityHistory, eqRange]);
 
+  const updateSignalField = (
+    field: 'stopLoss' | 'target1' | 'target2' | 'positionQty',
+    rawVal: string
+  ) => {
+    const num = Number(rawVal);
+    if (!Number.isFinite(num) || num <= 0) return;
+    const next = { ...activeSignal, [field]: num };
+    const riskDist = Math.abs(next.entry - next.stopLoss);
+    const rewardDist = Math.abs(next.target1 - next.entry);
+    next.riskReward =
+      riskDist > 0 ? Math.round((rewardDist / riskDist) * 10) / 10 : next.riskReward;
+    onUpdateSignal(next);
+  };
+
   return (
     <div className="space-y-6">
       {/* KPI Strip */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
           <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
-            Total Return ({activeVersion.version})
+            Realized P&amp;L Ledger
           </p>
           <div className="mt-1.5 flex items-baseline justify-between">
-            <span className="font-mono text-2xl font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums">
-              +{activeVersion.totalReturnPct.toFixed(1)}%
+            <span
+              className={`font-mono text-2xl font-semibold tabular-nums ${
+                ledgerSummary.netPnl >= 0
+                  ? 'text-emerald-600 dark:text-emerald-400'
+                  : 'text-red-600 dark:text-red-400'
+              }`}
+            >
+              {ledgerSummary.netPnl >= 0 ? '+' : ''}$
+              {ledgerSummary.netPnl.toLocaleString()}
             </span>
             <span className="text-xs text-slate-500 dark:text-slate-400">
-              Out-of-sample
-            </span>
-          </div>
-        </div>
-
-        <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
-            Sharpe Ratio
-          </p>
-          <div className="mt-1.5 flex items-baseline justify-between">
-            <span className="font-mono text-2xl font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
-              {activeVersion.sharpe.toFixed(2)}
-            </span>
-            <span className="text-xs text-slate-500 dark:text-slate-400">
-              Risk-adjusted
+              {closedTrades.length} closed
             </span>
           </div>
         </div>
@@ -143,6 +215,20 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
 
         <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
           <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
+            Strategy Return ({activeVersion.version})
+          </p>
+          <div className="mt-1.5 flex items-baseline justify-between">
+            <span className="font-mono text-2xl font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums">
+              +{activeVersion.totalReturnPct.toFixed(1)}%
+            </span>
+            <span className="text-xs text-slate-500 dark:text-slate-400">
+              Sharpe {activeVersion.sharpe.toFixed(2)}
+            </span>
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
             Max Drawdown
           </p>
           <div className="mt-1.5 flex items-baseline justify-between">
@@ -150,13 +236,13 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
               {activeVersion.maxDrawdownPct.toFixed(1)}%
             </span>
             <span className="text-xs text-slate-500 dark:text-slate-400">
-              Peak-to-trough
+              Win {ledgerSummary.winRate}%
             </span>
           </div>
         </div>
       </div>
 
-      {/* Main Chart + Risk-Gated Execution Panel */}
+      {/* Main Chart + Auto-Trading Execution Panel */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-stretch">
         {/* Candlestick Chart (8 cols) */}
         <div className="flex flex-col justify-between rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 lg:col-span-8">
@@ -166,10 +252,10 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                 {market.label} · {timeframe} · {market.exchange}
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                {feedSourceLabel} · AI trade levels mapped directly on price
+                {feedSourceLabel} · Entry, Stop Loss, Target 1 &amp; Target 2 mapped on chart
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={() => setShowMaFast((v) => !v)}
@@ -200,6 +286,22 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                 <Play className="h-3.5 w-3.5" />
                 Tick Prices
               </button>
+              <button
+                type="button"
+                onClick={() => onToggleAutoTick(!autoTickEnabled)}
+                className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                  autoTickEnabled
+                    ? 'border-emerald-600 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300'
+                    : 'border-slate-200 text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
+                }`}
+              >
+                {autoTickEnabled ? (
+                  <Pause className="h-3.5 w-3.5" />
+                ) : (
+                  <Play className="h-3.5 w-3.5" />
+                )}
+                {autoTickEnabled ? 'Auto-Tick On' : 'Auto-Tick Off'}
+              </button>
             </div>
           </div>
 
@@ -212,16 +314,16 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           />
         </div>
 
-        {/* Pre-Trade Risk Gate & Execution Layer (4 cols) */}
+        {/* Auto-Trading Order Ticket & Risk Gate (4 cols) */}
         <div className="flex flex-col justify-between rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 lg:col-span-4">
-          <div className="space-y-4">
+          <div className="space-y-3.5">
             <div className="flex items-start justify-between gap-2 border-b border-slate-100 pb-3 dark:border-slate-800">
               <div>
                 <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-                  Execution Risk Gate
+                  Auto-Trade &amp; Risk Gate
                 </h2>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Target Broker: {broker}
+                  Broker: {broker} · Editable SL, Target 1 &amp; Target 2
                 </p>
               </div>
               <button
@@ -234,78 +336,121 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
               </button>
             </div>
 
-            {/* Active Signal Summary */}
-            <div className="space-y-2 border-b border-slate-100 pb-3 dark:border-slate-800">
+            {/* Editable SL / Target 1 / Target 2 */}
+            <div className="space-y-2.5 border-b border-slate-100 pb-3 dark:border-slate-800">
               <div className="flex items-center justify-between text-xs">
                 <span className="text-slate-500 dark:text-slate-400">
-                  Queued Signal · {activeSignal.symbol}
+                  Signal · {activeSignal.symbol} ({activeSignal.action})
                 </span>
-                <span
-                  className={`font-mono font-semibold ${
-                    activeSignal.action === 'BUY'
-                      ? 'text-emerald-600 dark:text-emerald-400'
-                      : activeSignal.action === 'SELL'
-                        ? 'text-red-600 dark:text-red-400'
-                        : 'text-amber-600 dark:text-amber-400'
-                  }`}
-                >
-                  {activeSignal.action} · R:R {activeSignal.riskReward.toFixed(1)}:1
+                <span className="font-mono font-semibold text-blue-600 dark:text-blue-400 tabular-nums">
+                  R:R {activeSignal.riskReward.toFixed(1)}:1
                 </span>
               </div>
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs tabular-nums">
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Entry</span>
-                  <span className="font-mono font-medium text-slate-900 dark:text-slate-100">
-                    {formatPrice(activeSignal.entry, getMarketMeta(activeSignal.symbol).decimals)}
-                  </span>
+
+              <div className="grid grid-cols-2 gap-2.5 text-xs">
+                <div>
+                  <label className="mb-1 block text-[11px] text-slate-500">
+                    Entry Price
+                  </label>
+                  <div className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 font-mono font-medium text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 tabular-nums">
+                    {formatPrice(
+                      activeSignal.entry,
+                      getMarketMeta(activeSignal.symbol).decimals
+                    )}
+                  </div>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Stop Loss</span>
-                  <span className="font-mono font-medium text-red-600 dark:text-red-400">
-                    {formatPrice(activeSignal.stopLoss, getMarketMeta(activeSignal.symbol).decimals)}
-                  </span>
+                <div>
+                  <label className="mb-1 block text-[11px] text-slate-500">
+                    Quantity ({market.lotUnit})
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    min="0.001"
+                    value={activeSignal.positionQty}
+                    onChange={(e) =>
+                      updateSignalField('positionQty', e.target.value)
+                    }
+                    className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-xs font-medium text-slate-900 focus:border-orange-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 tabular-nums"
+                  />
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Target 1</span>
-                  <span className="font-mono font-medium text-emerald-600 dark:text-emerald-400">
-                    {formatPrice(activeSignal.target1, getMarketMeta(activeSignal.symbol).decimals)}
-                  </span>
+                <div>
+                  <label className="mb-1 block text-[11px] text-red-600 dark:text-red-400">
+                    Stop Loss
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={activeSignal.stopLoss}
+                    onChange={(e) => updateSignalField('stopLoss', e.target.value)}
+                    className="w-full rounded-md border border-red-200 bg-white px-2.5 py-1.5 font-mono text-xs font-medium text-red-700 focus:border-red-500 focus:outline-none dark:border-red-900/70 dark:bg-slate-950 dark:text-red-400 tabular-nums"
+                  />
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Target 2</span>
-                  <span className="font-mono font-medium text-emerald-600 dark:text-emerald-400">
-                    {formatPrice(activeSignal.target2, getMarketMeta(activeSignal.symbol).decimals)}
-                  </span>
+                <div>
+                  <label className="mb-1 block text-[11px] text-emerald-600 dark:text-emerald-400">
+                    Target 1 (50% Book + Trail)
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={activeSignal.target1}
+                    onChange={(e) => updateSignalField('target1', e.target.value)}
+                    className="w-full rounded-md border border-emerald-200 bg-white px-2.5 py-1.5 font-mono text-xs font-medium text-emerald-700 focus:border-emerald-500 focus:outline-none dark:border-emerald-900/70 dark:bg-slate-950 dark:text-emerald-400 tabular-nums"
+                  />
+                </div>
+                <div className="col-span-2">
+                  <label className="mb-1 block text-[11px] text-emerald-600 dark:text-emerald-400">
+                    Target 2 (Final Exit)
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={activeSignal.target2}
+                    onChange={(e) => updateSignalField('target2', e.target.value)}
+                    className="w-full rounded-md border border-emerald-200 bg-white px-2.5 py-1.5 font-mono text-xs font-medium text-emerald-700 focus:border-emerald-500 focus:outline-none dark:border-emerald-900/70 dark:bg-slate-950 dark:text-emerald-400 tabular-nums"
+                  />
                 </div>
               </div>
             </div>
 
             {/* 6 Automated Risk Rules */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
+            <div className="space-y-1.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-medium text-slate-700 dark:text-slate-300">
-                  Pre-Trade Safety Checks
+                  Safety &amp; Auto-Exit Rules
                 </span>
-                <label className="flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={riskSettings.newsEventActive}
-                    onChange={(e) =>
-                      onUpdateRiskSettings({
-                        ...riskSettings,
-                        newsEventActive: e.target.checked,
-                      })
-                    }
-                    className="rounded border-slate-300 text-orange-600 focus:ring-orange-500"
-                  />
-                  Simulate News Halt
-                </label>
+                <div className="flex items-center gap-3 text-[11px] text-slate-500 dark:text-slate-400">
+                  <label className="flex items-center gap-1 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={autoExitEnabled}
+                      onChange={(e) => onToggleAutoExit(e.target.checked)}
+                      className="rounded border-slate-300 text-orange-600 focus:ring-orange-500"
+                    />
+                    Auto SL/T1/T2
+                  </label>
+                  <label className="flex items-center gap-1 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={riskSettings.newsEventActive}
+                      onChange={(e) =>
+                        onUpdateRiskSettings({
+                          ...riskSettings,
+                          newsEventActive: e.target.checked,
+                        })
+                      }
+                      className="rounded border-slate-300 text-orange-600 focus:ring-orange-500"
+                    />
+                    News Halt
+                  </label>
+                </div>
               </div>
+
               <div className="divide-y divide-slate-100 dark:divide-slate-800">
                 {riskChecks.map((rule) => (
                   <div
                     key={rule.id}
-                    className="flex items-center justify-between py-1.5 text-xs"
+                    className="flex items-center justify-between py-1 text-xs"
                   >
                     <div className="flex items-center gap-2 min-w-0">
                       {rule.passed ? (
@@ -352,102 +497,296 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
               {activeSignal.action === 'HOLD'
                 ? 'Signal is HOLD — No Order Queued'
                 : allRiskPassed
-                  ? `Execute Paper ${activeSignal.action} via ${broker}`
+                  ? `Place Auto-Trade ${activeSignal.action} (SL + T1 + T2)`
                   : 'Trade Blocked by Risk Manager'}
             </button>
           </div>
         </div>
       </div>
 
-      {/* Bottom Row: Open Positions + Live Equity Curve + Version History */}
+      {/* Open Auto-Trading Positions Table */}
+      <div className="rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              Active Auto-Trading Positions ({openPositions.length})
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Monitors Stop Loss, Target 1 (books 50% &amp; trails SL to Entry), and Target 2 automatically — or test any trigger directly
+            </p>
+          </div>
+          <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+            Auto-Exit Watcher: {autoExitEnabled ? 'Active' : 'Paused'}
+          </span>
+        </div>
+
+        {openPositions.length === 0 ? (
+          <div className="rounded-md border border-dashed border-slate-200 py-8 text-center text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400">
+            No active auto-trading positions. Place a trade above to monitor Stop Loss, Target 1, and Target 2.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                  <th className="py-2 font-medium">Symbol</th>
+                  <th className="py-2 text-right font-medium">Qty</th>
+                  <th className="py-2 text-right font-medium">Entry</th>
+                  <th className="py-2 text-right font-medium">LTP</th>
+                  <th className="py-2 text-right font-medium text-red-600 dark:text-red-400">
+                    Stop Loss
+                  </th>
+                  <th className="py-2 text-right font-medium text-emerald-600 dark:text-emerald-400">
+                    Target 1
+                  </th>
+                  <th className="py-2 text-right font-medium text-emerald-600 dark:text-emerald-400">
+                    Target 2
+                  </th>
+                  <th className="py-2 text-right font-medium">Live PnL</th>
+                  <th className="py-2 text-right font-medium">Simulate / Exit</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800 tabular-nums">
+                {openPositions.map((pos) => {
+                  const dec = getMarketMeta(pos.symbol).decimals;
+                  const diff =
+                    pos.side === 'BUY'
+                      ? pos.ltp - pos.entryPrice
+                      : pos.entryPrice - pos.ltp;
+                  const mult =
+                    pos.symbol === 'EURUSD' ||
+                    pos.symbol === 'GBPUSD' ||
+                    pos.symbol === 'AUDUSD'
+                      ? 10000
+                      : pos.symbol === 'XAUUSD'
+                        ? 10
+                        : 1;
+                  const pnl = Math.round(diff * pos.qty * mult);
+                  return (
+                    <tr
+                      key={pos.id}
+                      className="hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                    >
+                      <td className="py-2.5 font-medium text-slate-900 dark:text-slate-100">
+                        <div>
+                          {pos.symbol} · {pos.side}
+                        </div>
+                        <div className="text-[11px] font-normal text-slate-500">
+                          {pos.broker}
+                          {pos.target1Hit ? ' · T1 Booked (SL at Entry)' : ''}
+                        </div>
+                      </td>
+                      <td className="py-2.5 text-right font-mono">{pos.qty}</td>
+                      <td className="py-2.5 text-right font-mono">
+                        {formatPrice(pos.entryPrice, dec)}
+                      </td>
+                      <td className="py-2.5 text-right font-mono font-semibold text-slate-900 dark:text-slate-100">
+                        {formatPrice(pos.ltp, dec)}
+                      </td>
+                      <td className="py-2.5 text-right font-mono text-red-600 dark:text-red-400">
+                        {formatPrice(pos.stopLoss, dec)}
+                      </td>
+                      <td className="py-2.5 text-right font-mono text-emerald-600 dark:text-emerald-400">
+                        {formatPrice(pos.target1, dec)}
+                        {pos.target1Hit ? ' ✓' : ''}
+                      </td>
+                      <td className="py-2.5 text-right font-mono text-emerald-600 dark:text-emerald-400">
+                        {formatPrice(pos.target2, dec)}
+                      </td>
+                      <td
+                        className={`py-2.5 text-right font-mono font-semibold ${
+                          pnl >= 0
+                            ? 'text-emerald-600 dark:text-emerald-400'
+                            : 'text-red-600 dark:text-red-400'
+                        }`}
+                      >
+                        {pnl >= 0 ? '+' : ''}${pnl}
+                      </td>
+                      <td className="py-2.5 text-right">
+                        <div className="inline-flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => onSimulateTrigger(pos.id, 'SL')}
+                            title="Simulate Stop Loss hit"
+                            className="rounded border border-red-200 px-1.5 py-1 text-[10px] font-medium text-red-700 hover:bg-red-50 dark:border-red-900/60 dark:text-red-300 dark:hover:bg-red-950/50 whitespace-nowrap"
+                          >
+                            Hit SL
+                          </button>
+                          {!pos.target1Hit && (
+                            <button
+                              type="button"
+                              onClick={() => onSimulateTrigger(pos.id, 'T1')}
+                              title="Simulate Target 1 hit"
+                              className="rounded border border-emerald-200 px-1.5 py-1 text-[10px] font-medium text-emerald-700 hover:bg-emerald-50 dark:border-emerald-900/60 dark:text-emerald-300 dark:hover:bg-emerald-950/50 whitespace-nowrap"
+                            >
+                              Hit T1
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => onSimulateTrigger(pos.id, 'T2')}
+                            title="Simulate Target 2 hit"
+                            className="rounded border border-emerald-200 px-1.5 py-1 text-[10px] font-medium text-emerald-700 hover:bg-emerald-50 dark:border-emerald-900/60 dark:text-emerald-300 dark:hover:bg-emerald-950/50 whitespace-nowrap"
+                          >
+                            Hit T2
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onClosePosition(pos.id)}
+                            className="rounded border border-slate-200 px-2 py-1 text-[10px] font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 whitespace-nowrap"
+                          >
+                            Close
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Profit & Loss Ledger + Equity Curve & Version History */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-        {/* Open Positions Table */}
+        {/* Profit & Loss Ledger (7 cols) */}
         <div className="rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 lg:col-span-7">
-          <div className="mb-3 flex items-center justify-between">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3 dark:border-slate-800">
             <div>
               <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                Open Positions ({openPositions.length})
+                Profit &amp; Loss Ledger ({filteredLedger.length})
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Closing a position logs it directly to the Self-Improvement Observability layer
+                Realized profit &amp; loss automatically recorded after hitting Stop Loss, Target 1, or Target 2
+              </p>
+            </div>
+            <div className="flex items-center gap-1 rounded-md bg-slate-100 p-0.5 dark:bg-slate-800">
+              {(
+                [
+                  { id: 'all', label: 'All' },
+                  { id: 'targets', label: 'Targets' },
+                  { id: 'sl', label: 'Stop Loss' },
+                  { id: 'manual', label: 'Manual' },
+                ] as const
+              ).map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setLedgerFilter(tab.id)}
+                  className={`rounded px-2.5 py-1 text-[11px] font-medium transition-colors whitespace-nowrap ${
+                    ledgerFilter === tab.id
+                      ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-900 dark:text-white'
+                      : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Ledger Totals Strip */}
+          <div className="mb-4 grid grid-cols-3 gap-4 border-b border-slate-100 pb-3 text-xs dark:border-slate-800 tabular-nums">
+            <div>
+              <span className="text-slate-500">Gross Profit</span>
+              <p className="mt-0.5 font-mono font-semibold text-emerald-600 dark:text-emerald-400">
+                +${ledgerSummary.grossProfit.toLocaleString()}
+              </p>
+            </div>
+            <div>
+              <span className="text-slate-500">Gross Loss</span>
+              <p className="mt-0.5 font-mono font-semibold text-red-600 dark:text-red-400">
+                -${Math.abs(ledgerSummary.grossLoss).toLocaleString()}
+              </p>
+            </div>
+            <div>
+              <span className="text-slate-500">Net Realized P&amp;L</span>
+              <p
+                className={`mt-0.5 font-mono font-semibold ${
+                  ledgerSummary.netPnl >= 0
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : 'text-red-600 dark:text-red-400'
+                }`}
+              >
+                {ledgerSummary.netPnl >= 0 ? '+' : ''}$
+                {ledgerSummary.netPnl.toLocaleString()}
               </p>
             </div>
           </div>
 
-          {openPositions.length === 0 ? (
-            <div className="rounded-md border border-dashed border-slate-200 py-8 text-center text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400">
-              No active positions. Generate a signal in AI Trading Agent or execute the queued signal above.
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                    <th className="py-2 font-medium">Symbol</th>
-                    <th className="py-2 font-medium">Broker</th>
-                    <th className="py-2 text-right font-medium">Qty</th>
-                    <th className="py-2 text-right font-medium">Entry</th>
-                    <th className="py-2 text-right font-medium">LTP</th>
-                    <th className="py-2 text-right font-medium">PnL</th>
-                    <th className="py-2 text-right font-medium">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800 tabular-nums">
-                  {openPositions.map((pos) => {
-                    const dec = getMarketMeta(pos.symbol).decimals;
-                    const diff =
-                      pos.side === 'BUY'
-                        ? pos.ltp - pos.entryPrice
-                        : pos.entryPrice - pos.ltp;
-                    const mult =
-                      pos.symbol === 'EURUSD' ? 10000 : pos.symbol === 'XAUUSD' ? 10 : 1;
-                    const pnl = Math.round(diff * pos.qty * mult);
-                    return (
-                      <tr
-                        key={pos.id}
-                        className="hover:bg-slate-50 dark:hover:bg-slate-800/50"
-                      >
-                        <td className="py-2.5 font-medium text-slate-900 dark:text-slate-100">
-                          {pos.symbol} · {pos.side}
-                        </td>
-                        <td className="py-2.5 text-slate-600 dark:text-slate-400">
-                          {pos.broker}
-                        </td>
-                        <td className="py-2.5 text-right font-mono">{pos.qty}</td>
-                        <td className="py-2.5 text-right font-mono">
-                          {formatPrice(pos.entryPrice, dec)}
-                        </td>
-                        <td className="py-2.5 text-right font-mono">
-                          {formatPrice(pos.ltp, dec)}
-                        </td>
-                        <td
-                          className={`py-2.5 text-right font-mono font-semibold ${
-                            pnl >= 0
+          <div className="max-h-72 overflow-x-auto overflow-y-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="sticky top-0 bg-white dark:bg-slate-900">
+                <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                  <th className="py-2 font-medium">Symbol</th>
+                  <th className="py-2 text-right font-medium">Qty</th>
+                  <th className="py-2 text-right font-medium">Entry</th>
+                  <th className="py-2 text-right font-medium">Exit</th>
+                  <th className="py-2 pl-3 font-medium">Trigger</th>
+                  <th className="py-2 text-right font-medium">P&amp;L</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800 tabular-nums">
+                {filteredLedger.map((t) => {
+                  const dec = getMarketMeta(t.symbol).decimals;
+                  return (
+                    <tr
+                      key={t.id}
+                      className="hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                    >
+                      <td className="py-2.5">
+                        <div className="font-medium text-slate-900 dark:text-slate-100">
+                          {t.symbol} · {t.side}
+                        </div>
+                        <div className="font-mono text-[10px] text-slate-400">
+                          {t.closedAt}
+                        </div>
+                      </td>
+                      <td className="py-2.5 text-right font-mono">{t.qty}</td>
+                      <td className="py-2.5 text-right font-mono">
+                        {formatPrice(t.entryPrice, dec)}
+                      </td>
+                      <td className="py-2.5 text-right font-mono">
+                        {formatPrice(t.exitPrice, dec)}
+                      </td>
+                      <td className="py-2.5 pl-3">
+                        <span
+                          className={`font-medium ${
+                            t.exitReason.includes('Target')
                               ? 'text-emerald-600 dark:text-emerald-400'
-                              : 'text-red-600 dark:text-red-400'
+                              : t.exitReason === 'Stop Loss'
+                                ? 'text-red-600 dark:text-red-400'
+                                : 'text-slate-600 dark:text-slate-300'
                           }`}
                         >
-                          {pnl >= 0 ? '+' : ''}${pnl}
-                        </td>
-                        <td className="py-2.5 text-right">
-                          <button
-                            type="button"
-                            onClick={() => onClosePosition(pos.id)}
-                            className="rounded border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 whitespace-nowrap"
-                          >
-                            Close Trade
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
+                          {t.exitReason}
+                        </span>
+                      </td>
+                      <td
+                        className={`py-2.5 text-right font-mono font-semibold ${
+                          t.pnl >= 0
+                            ? 'text-emerald-600 dark:text-emerald-400'
+                            : 'text-red-600 dark:text-red-400'
+                        }`}
+                      >
+                        <div>
+                          {t.pnl >= 0 ? '+' : ''}${t.pnl.toLocaleString()}
+                        </div>
+                        <div className="text-[10px] font-normal">
+                          {t.pnlPct >= 0 ? '+' : ''}
+                          {t.pnlPct}%
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
 
-        {/* Live Equity Curve & Version History */}
+        {/* Live Equity Curve & Version History (5 cols) */}
         <div className="space-y-6 lg:col-span-5">
           <div className="rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
             <div className="mb-3 flex items-center justify-between gap-2">
@@ -505,7 +844,9 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                     <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
                       {v.version}
                     </span>
-                    <span className="mx-1.5 text-slate-300 dark:text-slate-600">·</span>
+                    <span className="mx-1.5 text-slate-300 dark:text-slate-600">
+                      ·
+                    </span>
                     <span className="text-slate-600 dark:text-slate-300 truncate">
                       {v.label}
                     </span>

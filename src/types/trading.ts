@@ -140,7 +140,9 @@ export interface OpenPosition {
   entryPrice: number;
   ltp: number;
   stopLoss: number;
-  target: number;
+  target1: number;
+  target2: number;
+  target1Hit?: boolean;
   openedAt: string;
   orderStatus: 'Filled' | 'Partial' | 'Sent';
   strategyVersion: string;
@@ -154,6 +156,9 @@ export interface ClosedTradeLog {
   qty: number;
   entryPrice: number;
   exitPrice: number;
+  stopLoss?: number;
+  target1?: number;
+  target2?: number;
   pnl: number;
   pnlPct: number;
   entryHour: number;
@@ -162,7 +167,13 @@ export interface ClosedTradeLog {
   regime: 'Trending' | 'Sideways' | 'High Volatility';
   strategyVersion: string;
   closedAt: string;
-  exitReason: 'Target Hit' | 'Stop Loss' | 'Manual Close' | 'Trailing Stop';
+  exitReason:
+    | 'Target 1 Hit'
+    | 'Target 2 Hit'
+    | 'Target Hit'
+    | 'Stop Loss'
+    | 'Manual Close'
+    | 'Trailing Stop';
 }
 
 export interface BacktestConfig {

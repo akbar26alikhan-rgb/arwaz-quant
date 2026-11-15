@@ -163,6 +163,8 @@ export default function App() {
     useState<ClosedTradeLog[]>(INITIAL_CLOSED_TRADES);
   const [priceTicks, setPriceTicks] = useState(0);
   const [orderBanner, setOrderBanner] = useState<string | null>(null);
+  const [autoExitEnabled, setAutoExitEnabled] = useState(true);
+  const [autoTickEnabled, setAutoTickEnabled] = useState(false);
 
   const [riskSettings, setRiskSettings] = useState<RiskSettings>({
     accountCapital: 100000,
@@ -392,9 +394,128 @@ export default function App() {
     );
   };
 
+  const computePnl = (pos: OpenPosition, exitPrice: number, exitQty: number) => {
+    const diff =
+      pos.side === 'BUY' ? exitPrice - pos.entryPrice : pos.entryPrice - exitPrice;
+    const mult =
+      pos.symbol === 'EURUSD' || pos.symbol === 'GBPUSD' || pos.symbol === 'AUDUSD'
+        ? 10000
+        : pos.symbol === 'XAUUSD'
+          ? 10
+          : 1;
+    const pnl = Math.round(diff * exitQty * mult);
+    const pnlPct =
+      pos.entryPrice > 0
+        ? Math.round((diff / pos.entryPrice) * 100 * 100) / 100
+        : 0;
+    return { pnl, pnlPct };
+  };
+
+  const buildClosedLog = (
+    pos: OpenPosition,
+    exitPrice: number,
+    exitQty: number,
+    exitReason: ClosedTradeLog['exitReason']
+  ): ClosedTradeLog => {
+    const { pnl, pnlPct } = computePnl(pos, exitPrice, exitQty);
+    return {
+      id: `tr-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      symbol: pos.symbol,
+      side: pos.side,
+      broker: pos.broker,
+      qty: exitQty,
+      entryPrice: pos.entryPrice,
+      exitPrice,
+      stopLoss: pos.stopLoss,
+      target1: pos.target1,
+      target2: pos.target2,
+      pnl,
+      pnlPct,
+      entryHour: new Date().getHours(),
+      adx: engineeredRows[engineeredRows.length - 1]?.adx ?? 21.4,
+      volatilityRatio: pnl < 0 ? 1.7 : 1.05,
+      regime: engineeredRows[engineeredRows.length - 1]?.regime ?? 'Trending',
+      strategyVersion: pos.strategyVersion,
+      closedAt: new Date().toLocaleString(),
+      exitReason,
+    };
+  };
+
+  const processPositionsWithTriggers = (
+    nextPositions: OpenPosition[],
+    forceCheck = false
+  ) => {
+    if (!autoExitEnabled && !forceCheck) {
+      setOpenPositions(nextPositions);
+      return;
+    }
+
+    const remaining: OpenPosition[] = [];
+    const newLogs: ClosedTradeLog[] = [];
+    const notices: string[] = [];
+
+    for (const pos of nextPositions) {
+      const dec = getMarketMeta(pos.symbol, customMarkets[pos.symbol]).decimals;
+      const isBuy = pos.side === 'BUY';
+      const hitSL = isBuy ? pos.ltp <= pos.stopLoss : pos.ltp >= pos.stopLoss;
+      const hitT2 = isBuy ? pos.ltp >= pos.target2 : pos.ltp <= pos.target2;
+      const hitT1 =
+        !pos.target1Hit && (isBuy ? pos.ltp >= pos.target1 : pos.ltp <= pos.target1);
+
+      if (hitSL) {
+        const log = buildClosedLog(pos, pos.stopLoss, pos.qty, 'Stop Loss');
+        newLogs.push(log);
+        notices.push(
+          `Auto-Exit: ${pos.symbol} hit Stop Loss @ ${formatNum(pos.stopLoss, dec)} (${log.pnl >= 0 ? '+' : ''}$${log.pnl})`
+        );
+      } else if (hitT2) {
+        const log = buildClosedLog(pos, pos.target2, pos.qty, 'Target 2 Hit');
+        newLogs.push(log);
+        notices.push(
+          `Auto-Exit: ${pos.symbol} hit Target 2 @ ${formatNum(pos.target2, dec)} (+$${log.pnl})`
+        );
+      } else if (hitT1) {
+        const halfQty = Math.round((pos.qty / 2) * 10000) / 10000;
+        const bookQty = halfQty > 0 && halfQty < pos.qty ? halfQty : pos.qty;
+        const log = buildClosedLog(pos, pos.target1, bookQty, 'Target 1 Hit');
+        newLogs.push(log);
+
+        if (bookQty < pos.qty) {
+          const leftQty = Math.round((pos.qty - bookQty) * 10000) / 10000;
+          remaining.push({
+            ...pos,
+            qty: leftQty,
+            target1Hit: true,
+            stopLoss: pos.entryPrice,
+            orderStatus: 'Partial',
+          });
+          notices.push(
+            `Target 1 Hit: ${pos.symbol} booked ${bookQty} @ ${formatNum(pos.target1, dec)} (+$${log.pnl}); SL trailed to Entry`
+          );
+        } else {
+          notices.push(
+            `Target 1 Hit: ${pos.symbol} closed @ ${formatNum(pos.target1, dec)} (+$${log.pnl})`
+          );
+        }
+      } else {
+        remaining.push(pos);
+      }
+    }
+
+    setOpenPositions(remaining);
+    if (newLogs.length > 0) {
+      setClosedTrades((prev) => [...newLogs, ...prev]);
+      setOrderBanner(notices[0]);
+    }
+  };
+
+  function formatNum(val: number, dec: number) {
+    return val.toFixed(dec);
+  }
+
   const handleExecutePaperOrder = (signal: TradeSignal) => {
     const meta = getMarketMeta(signal.symbol, customMarkets[signal.symbol]);
-    const fillBump = (Math.random() - 0.35) * (signal.entry * 0.002);
+    const fillBump = (Math.random() - 0.35) * (signal.entry * 0.0015);
     const newPos: OpenPosition = {
       id: `pos-${Date.now()}`,
       symbol: signal.symbol,
@@ -404,7 +525,9 @@ export default function App() {
       entryPrice: signal.entry,
       ltp: roundPrice(signal.entry + fillBump, meta.decimals),
       stopLoss: signal.stopLoss,
-      target: signal.target1,
+      target1: signal.target1,
+      target2: signal.target2,
+      target1Hit: false,
       openedAt: new Date().toLocaleTimeString([], {
         hour: '2-digit',
         minute: '2-digit',
@@ -414,59 +537,60 @@ export default function App() {
     };
     setOpenPositions((prev) => [newPos, ...prev]);
     setOrderBanner(
-      `Paper ${newPos.side} order filled on ${broker} for ${newPos.symbol} @ ${newPos.entryPrice}.`
+      `Auto-Trade order placed on ${broker}: ${newPos.symbol} @ ${newPos.entryPrice} · SL ${newPos.stopLoss} · T1 ${newPos.target1} · T2 ${newPos.target2}`
     );
   };
 
   const handleClosePosition = (id: string) => {
     const pos = openPositions.find((p) => p.id === id);
     if (!pos) return;
-    const diff =
-      pos.side === 'BUY' ? pos.ltp - pos.entryPrice : pos.entryPrice - pos.ltp;
-    const mult =
-      pos.symbol === 'EURUSD' ? 10000 : pos.symbol === 'XAUUSD' ? 10 : 1;
-    const pnl = Math.round(diff * pos.qty * mult);
-    const pnlPct = Math.round((diff / pos.entryPrice) * 100 * 100) / 100;
-
-    const logEntry: ClosedTradeLog = {
-      id: `tr-${Date.now()}`,
-      symbol: pos.symbol,
-      side: pos.side,
-      broker: pos.broker,
-      qty: pos.qty,
-      entryPrice: pos.entryPrice,
-      exitPrice: pos.ltp,
-      pnl,
-      pnlPct,
-      entryHour: new Date().getHours(),
-      adx: engineeredRows[engineeredRows.length - 1]?.adx ?? 21.4,
-      volatilityRatio: pnl < 0 ? 1.7 : 1.05,
-      regime: engineeredRows[engineeredRows.length - 1]?.regime ?? 'Trending',
-      strategyVersion: pos.strategyVersion,
-      closedAt: new Date().toLocaleString(),
-      exitReason: 'Manual Close',
-    };
-
+    const logEntry = buildClosedLog(pos, pos.ltp, pos.qty, 'Manual Close');
     setOpenPositions((prev) => prev.filter((p) => p.id !== id));
     setClosedTrades((prev) => [logEntry, ...prev]);
     setOrderBanner(
-      `Closed ${pos.symbol} (${pnl >= 0 ? '+' : ''}$${pnl}) and logged to Observability.`
+      `Closed ${pos.symbol} (${logEntry.pnl >= 0 ? '+' : ''}$${logEntry.pnl}) and recorded in P&L Ledger.`
     );
+  };
+
+  const handleUpdatePositionLevels = (
+    id: string,
+    levels: { stopLoss: number; target1: number; target2: number }
+  ) => {
+    setOpenPositions((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, ...levels } : p))
+    );
+  };
+
+  const handleSimulateTrigger = (id: string, trigger: 'SL' | 'T1' | 'T2') => {
+    const updated = openPositions.map((p) => {
+      if (p.id !== id) return p;
+      const targetPrice =
+        trigger === 'SL' ? p.stopLoss : trigger === 'T1' ? p.target1 : p.target2;
+      return { ...p, ltp: targetPrice };
+    });
+    processPositionsWithTriggers(updated, true);
   };
 
   const handleSimulateMarketTick = () => {
     setPriceTicks((t) => t + 1);
-    setOpenPositions((prev) =>
-      prev.map((pos) => {
-        const dec = getMarketMeta(pos.symbol, customMarkets[pos.symbol]).decimals;
-        const pctMove = (Math.random() - 0.46) * 0.0045;
-        return {
-          ...pos,
-          ltp: roundPrice(pos.ltp * (1 + pctMove), dec),
-        };
-      })
-    );
+    const updated = openPositions.map((pos) => {
+      const dec = getMarketMeta(pos.symbol, customMarkets[pos.symbol]).decimals;
+      const pctMove = (Math.random() - 0.45) * 0.0055;
+      return {
+        ...pos,
+        ltp: roundPrice(pos.ltp * (1 + pctMove), dec),
+      };
+    });
+    processPositionsWithTriggers(updated);
   };
+
+  useEffect(() => {
+    if (!autoTickEnabled || openPositions.length === 0) return;
+    const timer = setInterval(() => {
+      handleSimulateMarketTick();
+    }, 2200);
+    return () => clearInterval(timer);
+  });
 
   const handleDeployVersion = (
     proposal: ImprovementProposal,
@@ -736,12 +860,22 @@ export default function App() {
             feedSourceLabel={feedSourceLabel}
             rows={engineeredRows}
             activeSignal={activeSignal}
+            onUpdateSignal={(nextSig) =>
+              setSignalsBySymbol((prev) => ({ ...prev, [nextSig.symbol]: nextSig }))
+            }
             openPositions={openPositions}
+            closedTrades={closedTrades}
             riskSettings={riskSettings}
             onUpdateRiskSettings={setRiskSettings}
             onExecutePaperOrder={handleExecutePaperOrder}
             onClosePosition={handleClosePosition}
+            onUpdatePositionLevels={handleUpdatePositionLevels}
+            onSimulateTrigger={handleSimulateTrigger}
             onSimulateMarketTick={handleSimulateMarketTick}
+            autoExitEnabled={autoExitEnabled}
+            onToggleAutoExit={setAutoExitEnabled}
+            autoTickEnabled={autoTickEnabled}
+            onToggleAutoTick={setAutoTickEnabled}
             onNavigateTab={(t) => setActiveTab(t)}
             versions={versions}
             activeVersion={activeVersion}
