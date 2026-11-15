@@ -1,0 +1,6 @@
+{
+  "name": "Arwaz Quant",
+  "description": "End-to-end self-improving AI algorithmic trading platform featuring multi-market data pipelines, Gemini signal generation, walk-forward backtesting, risk controls, and paper execution.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
