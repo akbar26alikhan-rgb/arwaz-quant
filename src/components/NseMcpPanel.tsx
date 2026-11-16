@@ -284,7 +284,11 @@ export const NseMcpPanel: React.FC<NseMcpPanelProps> = ({
                       {name}
                     </p>
                     <p className="mt-1 font-mono text-sm font-semibold text-slate-900 dark:text-slate-100">
-                      {last.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                      {name === 'INDIA VIX' ? '' : '₹'}
+                      {last.toLocaleString('en-IN', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
                     </p>
                     <p
                       className={`font-mono text-[11px] font-medium ${

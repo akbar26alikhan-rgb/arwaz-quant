@@ -406,7 +406,7 @@ export const MARKETS: Record<string, MarketMeta> = {
     exchange: 'Forex',
     assetClass: 'Forex',
     defaultBroker: 'MetaTrader 5',
-    currency: 'JPY',
+    currency: 'USD',
     decimals: 2,
     basePrice: 153.45,
     lotUnit: 'Lot',
@@ -419,7 +419,7 @@ export const MARKETS: Record<string, MarketMeta> = {
     exchange: 'Forex',
     assetClass: 'Forex',
     defaultBroker: 'MetaTrader 5',
-    currency: 'INR',
+    currency: 'USD',
     decimals: 4,
     basePrice: 84.42,
     lotUnit: 'Lot',
@@ -445,7 +445,7 @@ export const MARKETS: Record<string, MarketMeta> = {
     exchange: 'Forex',
     assetClass: 'Forex',
     defaultBroker: 'MetaTrader 5',
-    currency: 'CAD',
+    currency: 'USD',
     decimals: 4,
     basePrice: 1.398,
     lotUnit: 'Lot',
@@ -458,7 +458,7 @@ export const MARKETS: Record<string, MarketMeta> = {
     exchange: 'Forex',
     assetClass: 'Forex',
     defaultBroker: 'MetaTrader 5',
-    currency: 'CHF',
+    currency: 'USD',
     decimals: 4,
     basePrice: 0.8825,
     lotUnit: 'Lot',
@@ -471,7 +471,7 @@ export const MARKETS: Record<string, MarketMeta> = {
     exchange: 'Forex',
     assetClass: 'Forex',
     defaultBroker: 'MetaTrader 5',
-    currency: 'INR',
+    currency: 'USD',
     decimals: 4,
     basePrice: 91.55,
     lotUnit: 'Lot',
@@ -484,7 +484,7 @@ export const MARKETS: Record<string, MarketMeta> = {
     exchange: 'Forex',
     assetClass: 'Forex',
     defaultBroker: 'MetaTrader 5',
-    currency: 'JPY',
+    currency: 'USD',
     decimals: 2,
     basePrice: 196.6,
     lotUnit: 'Lot',
@@ -649,11 +649,39 @@ export function roundPrice(value: number, decimals: number): number {
   return Math.round(value * factor) / factor;
 }
 
-export function formatPrice(value: number, decimals: number): string {
-  return value.toLocaleString('en-US', {
+export function formatPrice(
+  value: number,
+  decimals: number,
+  currency = 'USD'
+): string {
+  const locale = currency === 'INR' ? 'en-IN' : 'en-US';
+  return value.toLocaleString(locale, {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   });
+}
+
+export function getCurrencySymbol(currencyOrCategory: string): '₹' | '$' {
+  return currencyOrCategory === 'INR' || currencyOrCategory === 'indian_stock'
+    ? '₹'
+    : '$';
+}
+
+export function formatCurrencyPrice(
+  value: number,
+  decimals: number,
+  currency = 'USD'
+): string {
+  const sym = getCurrencySymbol(currency);
+  return `${sym}${formatPrice(value, decimals, currency)}`;
+}
+
+export function formatSignedPnl(value: number, currency = 'USD'): string {
+  const sym = getCurrencySymbol(currency);
+  const abs = Math.abs(Math.round(value)).toLocaleString(
+    currency === 'INR' ? 'en-IN' : 'en-US'
+  );
+  return `${value >= 0 ? '+' : '-'}${sym}${abs}`;
 }
 
 export function generateChartCandles(

@@ -224,7 +224,7 @@ export const NseBhavcopyPanel: React.FC<NseBhavcopyPanelProps> = ({
               <th className="px-3 py-2 text-right font-medium">Open</th>
               <th className="px-3 py-2 text-right font-medium">High</th>
               <th className="px-3 py-2 text-right font-medium">Low</th>
-              <th className="px-3 py-2 text-right font-medium">Close (INR)</th>
+              <th className="px-3 py-2 text-right font-medium">Close (₹ INR)</th>
               <th className="px-3 py-2 text-right font-medium">Change</th>
               <th className="px-3 py-2 text-right font-medium">Volume</th>
               <th className="px-3 py-2 text-right font-medium">Action</th>
@@ -260,16 +260,16 @@ export const NseBhavcopyPanel: React.FC<NseBhavcopyPanelProps> = ({
                       {r.name}
                     </td>
                     <td className="px-3 py-2 text-right font-mono">
-                      {r.open.toFixed(2)}
+                      ₹{r.open.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
                     <td className="px-3 py-2 text-right font-mono">
-                      {r.high.toFixed(2)}
+                      ₹{r.high.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
                     <td className="px-3 py-2 text-right font-mono">
-                      {r.low.toFixed(2)}
+                      ₹{r.low.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
                     <td className="px-3 py-2 text-right font-mono font-semibold text-slate-900 dark:text-slate-100">
-                      {r.close.toFixed(2)}
+                      ₹{r.close.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
                     <td
                       className={`px-3 py-2 text-right font-mono font-medium ${

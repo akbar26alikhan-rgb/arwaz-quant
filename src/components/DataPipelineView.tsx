@@ -12,7 +12,7 @@ import {
   NseSnapshot,
   Timeframe,
 } from '../types/trading';
-import { formatPrice } from '../engine/marketData';
+import { formatCurrencyPrice, getCurrencySymbol } from '../engine/marketData';
 import { NseBhavcopyPanel } from './NseBhavcopyPanel';
 import { NseMcpPanel } from './NseMcpPanel';
 
@@ -219,7 +219,8 @@ klines = client.get_historical_klines(
             <div className="flex justify-between">
               <span className="text-slate-500">Active Symbol</span>
               <span className="font-mono font-medium text-slate-900 dark:text-slate-100">
-                {market.symbol} ({market.exchange})
+                {market.symbol} ({market.exchange} · {getCurrencySymbol(market.currency)}{' '}
+                {market.currency})
               </span>
             </div>
             <div className="flex justify-between">
@@ -422,29 +423,35 @@ df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=${featureConfig.at
                     {r.date}
                   </td>
                   <td className="py-2 text-right">
-                    {formatPrice(r.open, market.decimals)}
+                    {formatCurrencyPrice(r.open, market.decimals, market.currency)}
                   </td>
                   <td className="py-2 text-right">
-                    {formatPrice(r.high, market.decimals)}
+                    {formatCurrencyPrice(r.high, market.decimals, market.currency)}
                   </td>
                   <td className="py-2 text-right">
-                    {formatPrice(r.low, market.decimals)}
+                    {formatCurrencyPrice(r.low, market.decimals, market.currency)}
                   </td>
                   <td className="py-2 text-right font-semibold text-slate-900 dark:text-slate-100">
-                    {formatPrice(r.close, market.decimals)}
+                    {formatCurrencyPrice(r.close, market.decimals, market.currency)}
                   </td>
                   <td className="py-2 text-right text-slate-500">
                     {r.volume.toLocaleString()}
                   </td>
                   <td className="py-2 text-right text-blue-600 dark:text-blue-400">
-                    {r.maFast !== null ? formatPrice(r.maFast, market.decimals) : '—'}
+                    {r.maFast !== null
+                      ? formatCurrencyPrice(r.maFast, market.decimals, market.currency)
+                      : '—'}
                   </td>
                   <td className="py-2 text-right text-orange-600 dark:text-orange-400">
-                    {r.maSlow !== null ? formatPrice(r.maSlow, market.decimals) : '—'}
+                    {r.maSlow !== null
+                      ? formatCurrencyPrice(r.maSlow, market.decimals, market.currency)
+                      : '—'}
                   </td>
                   <td className="py-2 text-right">{r.rsi ?? '—'}</td>
                   <td className="py-2 text-right">
-                    {r.atr !== null ? formatPrice(r.atr, market.decimals) : '—'}
+                    {r.atr !== null
+                      ? formatCurrencyPrice(r.atr, market.decimals, market.currency)
+                      : '—'}
                   </td>
                   <td className="py-2 text-right font-sans text-slate-600 dark:text-slate-300">
                     {r.regime}

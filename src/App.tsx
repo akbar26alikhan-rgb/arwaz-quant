@@ -26,6 +26,8 @@ import {
   CATEGORY_LABELS,
   cleanCandles,
   engineerFeatures,
+  formatCurrencyPrice,
+  formatSignedPnl,
   generateChartCandles,
   getMarketMeta,
   getMarketsByCategory,
@@ -444,7 +446,7 @@ export default function App() {
     setBhavcopyModalOpen(false);
     setActiveTab('overview');
     setOrderBanner(
-      `Loaded ${row.symbol} (${row.name}) from NSE Bhavcopy @ INR ${row.close.toFixed(2)}.`
+      `Loaded ${row.symbol} (${row.name}) from NSE Bhavcopy @ ${formatCurrencyPrice(row.close, 2, 'INR')}.`
     );
   };
 
@@ -509,7 +511,9 @@ export default function App() {
     const notices: string[] = [];
 
     for (const pos of nextPositions) {
-      const dec = getMarketMeta(pos.symbol, customMarkets[pos.symbol]).decimals;
+      const posMeta = getMarketMeta(pos.symbol, customMarkets[pos.symbol]);
+      const dec = posMeta.decimals;
+      const cur = posMeta.currency;
       const isBuy = pos.side === 'BUY';
       const hitSL = isBuy ? pos.ltp <= pos.stopLoss : pos.ltp >= pos.stopLoss;
       const hitT2 = isBuy ? pos.ltp >= pos.target2 : pos.ltp <= pos.target2;
@@ -520,13 +524,13 @@ export default function App() {
         const log = buildClosedLog(pos, pos.stopLoss, pos.qty, 'Stop Loss');
         newLogs.push(log);
         notices.push(
-          `Auto-Exit: ${pos.symbol} hit Stop Loss @ ${formatNum(pos.stopLoss, dec)} (${log.pnl >= 0 ? '+' : ''}$${log.pnl})`
+          `Auto-Exit: ${pos.symbol} hit Stop Loss @ ${formatCurrencyPrice(pos.stopLoss, dec, cur)} (${formatSignedPnl(log.pnl, cur)})`
         );
       } else if (hitT2) {
         const log = buildClosedLog(pos, pos.target2, pos.qty, 'Target 2 Hit');
         newLogs.push(log);
         notices.push(
-          `Auto-Exit: ${pos.symbol} hit Target 2 @ ${formatNum(pos.target2, dec)} (+$${log.pnl})`
+          `Auto-Exit: ${pos.symbol} hit Target 2 @ ${formatCurrencyPrice(pos.target2, dec, cur)} (${formatSignedPnl(log.pnl, cur)})`
         );
       } else if (hitT1) {
         const halfQty = Math.round((pos.qty / 2) * 10000) / 10000;
@@ -544,11 +548,11 @@ export default function App() {
             orderStatus: 'Partial',
           });
           notices.push(
-            `Target 1 Hit: ${pos.symbol} booked ${bookQty} @ ${formatNum(pos.target1, dec)} (+$${log.pnl}); SL trailed to Entry`
+            `Target 1 Hit: ${pos.symbol} booked ${bookQty} @ ${formatCurrencyPrice(pos.target1, dec, cur)} (${formatSignedPnl(log.pnl, cur)}); SL trailed to Entry`
           );
         } else {
           notices.push(
-            `Target 1 Hit: ${pos.symbol} closed @ ${formatNum(pos.target1, dec)} (+$${log.pnl})`
+            `Target 1 Hit: ${pos.symbol} closed @ ${formatCurrencyPrice(pos.target1, dec, cur)} (${formatSignedPnl(log.pnl, cur)})`
           );
         }
       } else {
@@ -563,12 +567,10 @@ export default function App() {
     }
   };
 
-  function formatNum(val: number, dec: number) {
-    return val.toFixed(dec);
-  }
-
   const handleExecutePaperOrder = (signal: TradeSignal) => {
     const meta = getMarketMeta(signal.symbol, customMarkets[signal.symbol]);
+    const cur = meta.currency;
+    const dec = meta.decimals;
     const fillBump = (Math.random() - 0.35) * (signal.entry * 0.0015);
     const newPos: OpenPosition = {
       id: `pos-${Date.now()}`,
@@ -577,7 +579,7 @@ export default function App() {
       broker,
       qty: signal.positionQty,
       entryPrice: signal.entry,
-      ltp: roundPrice(signal.entry + fillBump, meta.decimals),
+      ltp: roundPrice(signal.entry + fillBump, dec),
       stopLoss: signal.stopLoss,
       target1: signal.target1,
       target2: signal.target2,
@@ -591,18 +593,19 @@ export default function App() {
     };
     setOpenPositions((prev) => [newPos, ...prev]);
     setOrderBanner(
-      `Auto-Trade order placed on ${broker}: ${newPos.symbol} @ ${newPos.entryPrice} · SL ${newPos.stopLoss} · T1 ${newPos.target1} · T2 ${newPos.target2}`
+      `Auto-Trade order placed on ${broker}: ${newPos.symbol} @ ${formatCurrencyPrice(newPos.entryPrice, dec, cur)} · SL ${formatCurrencyPrice(newPos.stopLoss, dec, cur)} · T1 ${formatCurrencyPrice(newPos.target1, dec, cur)} · T2 ${formatCurrencyPrice(newPos.target2, dec, cur)}`
     );
   };
 
   const handleClosePosition = (id: string) => {
     const pos = openPositions.find((p) => p.id === id);
     if (!pos) return;
+    const cur = getMarketMeta(pos.symbol, customMarkets[pos.symbol]).currency;
     const logEntry = buildClosedLog(pos, pos.ltp, pos.qty, 'Manual Close');
     setOpenPositions((prev) => prev.filter((p) => p.id !== id));
     setClosedTrades((prev) => [logEntry, ...prev]);
     setOrderBanner(
-      `Closed ${pos.symbol} (${logEntry.pnl >= 0 ? '+' : ''}$${logEntry.pnl}) and recorded in P&L Ledger.`
+      `Closed ${pos.symbol} (${formatSignedPnl(logEntry.pnl, cur)}) and recorded in P&L Ledger.`
     );
   };
 

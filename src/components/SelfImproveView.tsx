@@ -20,6 +20,7 @@ import {
 } from '../types/trading';
 import { analyzeTradeFailures } from '../engine/riskAndFailures';
 import { runFullBacktest } from '../engine/backtestEngine';
+import { formatSignedPnl, getMarketMeta } from '../engine/marketData';
 import { DualEquityChart } from './Charts';
 
 interface SelfImproveViewProps {
@@ -309,7 +310,7 @@ ib.placeOrder(contract, order)`,
                           : 'text-red-600 dark:text-red-400'
                       }`}
                     >
-                      {t.pnl >= 0 ? '+' : ''}${t.pnl}
+                      {formatSignedPnl(t.pnl, getMarketMeta(t.symbol).currency)}
                     </td>
                   </tr>
                 ))}
@@ -405,6 +406,7 @@ ib.placeOrder(contract, order)`,
               data={comparisonCurve}
               primaryLabel={`Candidate (${proposal.proposedVersion})`}
               secondaryLabel={`Current (${activeVersion.version})`}
+              currency={market.currency}
               height={175}
             />
 

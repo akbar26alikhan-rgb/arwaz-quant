@@ -215,6 +215,7 @@ print(pf.stats())`}
               data={output.inSampleCurve}
               primaryLabel="Strategy"
               secondaryLabel="Buy & Hold"
+              currency={market.currency}
               height={190}
             />
           </div>
@@ -244,6 +245,7 @@ print(pf.stats())`}
               data={output.outOfSampleCurve}
               primaryLabel="Strategy (Unseen Data)"
               secondaryLabel="Buy & Hold"
+              currency={market.currency}
               height={190}
             />
           </div>
@@ -312,6 +314,7 @@ print(pf.stats())`}
           <MonteCarloChart
             paths={output.monteCarloPaths}
             median={output.monteCarloMedian}
+            currency={market.currency}
           />
         </div>
 

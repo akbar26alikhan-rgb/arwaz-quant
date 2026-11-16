@@ -13,7 +13,7 @@ import {
   Timeframe,
   TradeSignal,
 } from '../types/trading';
-import { formatPrice, roundPrice } from '../engine/marketData';
+import { formatCurrencyPrice, roundPrice } from '../engine/marketData';
 
 interface TradingAgentViewProps {
   market: MarketMeta;
@@ -184,7 +184,7 @@ export const TradingAgentView: React.FC<TradingAgentViewProps> = ({
               <div>
                 <span className="text-slate-500">Latest Close</span>
                 <p className="font-mono text-base font-semibold text-slate-900 dark:text-slate-100">
-                  {formatPrice(latest.close, market.decimals)}
+                  {formatCurrencyPrice(latest.close, market.decimals, market.currency)}
                 </p>
               </div>
               <div>
@@ -202,8 +202,10 @@ export const TradingAgentView: React.FC<TradingAgentViewProps> = ({
               <div>
                 <span className="text-slate-500">ATR (14) · ADX</span>
                 <p className="font-mono font-medium text-slate-800 dark:text-slate-200">
-                  {latest.atr !== null ? formatPrice(latest.atr, market.decimals) : '—'} ·{' '}
-                  {latest.adx ?? '—'}
+                  {latest.atr !== null
+                    ? formatCurrencyPrice(latest.atr, market.decimals, market.currency)
+                    : '—'}{' '}
+                  · {latest.adx ?? '—'}
                 </p>
               </div>
             </div>
@@ -302,25 +304,25 @@ export const TradingAgentView: React.FC<TradingAgentViewProps> = ({
             <div>
               <span className="text-[11px] text-slate-500">Entry</span>
               <p className="font-mono text-sm font-semibold text-slate-900 dark:text-slate-100">
-                {formatPrice(activeSignal.entry, market.decimals)}
+                {formatCurrencyPrice(activeSignal.entry, market.decimals, market.currency)}
               </p>
             </div>
             <div>
               <span className="text-[11px] text-slate-500">Stop Loss</span>
               <p className="font-mono text-sm font-semibold text-red-600 dark:text-red-400">
-                {formatPrice(activeSignal.stopLoss, market.decimals)}
+                {formatCurrencyPrice(activeSignal.stopLoss, market.decimals, market.currency)}
               </p>
             </div>
             <div>
               <span className="text-[11px] text-slate-500">Target 1</span>
               <p className="font-mono text-sm font-semibold text-emerald-600 dark:text-emerald-400">
-                {formatPrice(activeSignal.target1, market.decimals)}
+                {formatCurrencyPrice(activeSignal.target1, market.decimals, market.currency)}
               </p>
             </div>
             <div>
               <span className="text-[11px] text-slate-500">Target 2</span>
               <p className="font-mono text-sm font-semibold text-emerald-600 dark:text-emerald-400">
-                {formatPrice(activeSignal.target2, market.decimals)}
+                {formatCurrencyPrice(activeSignal.target2, market.decimals, market.currency)}
               </p>
             </div>
             <div>

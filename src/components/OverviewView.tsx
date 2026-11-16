@@ -21,7 +21,12 @@ import {
   Timeframe,
   TradeSignal,
 } from '../types/trading';
-import { formatPrice, getMarketMeta } from '../engine/marketData';
+import {
+  formatCurrencyPrice,
+  formatSignedPnl,
+  getCurrencySymbol,
+  getMarketMeta,
+} from '../engine/marketData';
 import { evaluateRiskGate } from '../engine/riskAndFailures';
 import { CandlestickChart, DualEquityChart } from './Charts';
 
@@ -105,8 +110,11 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   );
   const allRiskPassed = riskChecks.every((c) => c.passed);
 
-  const totalOpenPnl = useMemo(() => {
-    return openPositions.reduce((sum, pos) => {
+  const openPnlByCurrency = useMemo(() => {
+    let inr = 0;
+    let usd = 0;
+    for (const pos of openPositions) {
+      const meta = getMarketMeta(pos.symbol);
       const diff =
         pos.side === 'BUY' ? pos.ltp - pos.entryPrice : pos.entryPrice - pos.ltp;
       const mult =
@@ -115,25 +123,55 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           : pos.symbol === 'XAUUSD'
             ? 10
             : 1;
-      return sum + diff * pos.qty * mult;
-    }, 0);
+      const val = diff * pos.qty * mult;
+      if (meta.currency === 'INR') inr += val;
+      else usd += val;
+    }
+    return { inr, usd };
   }, [openPositions]);
 
   const ledgerSummary = useMemo(() => {
-    const netPnl = closedTrades.reduce((s, t) => s + t.pnl, 0);
-    const grossProfit = closedTrades
-      .filter((t) => t.pnl > 0)
-      .reduce((s, t) => s + t.pnl, 0);
-    const grossLoss = closedTrades
-      .filter((t) => t.pnl < 0)
-      .reduce((s, t) => s + t.pnl, 0);
-    const wins = closedTrades.filter((t) => t.pnl > 0).length;
+    let netInr = 0;
+    let grossProfitInr = 0;
+    let grossLossInr = 0;
+    let netUsd = 0;
+    let grossProfitUsd = 0;
+    let grossLossUsd = 0;
+    let wins = 0;
+
+    for (const t of closedTrades) {
+      if (t.pnl > 0) wins++;
+      const meta = getMarketMeta(t.symbol);
+      if (meta.currency === 'INR') {
+        netInr += t.pnl;
+        if (t.pnl > 0) grossProfitInr += t.pnl;
+        else if (t.pnl < 0) grossLossInr += t.pnl;
+      } else {
+        netUsd += t.pnl;
+        if (t.pnl > 0) grossProfitUsd += t.pnl;
+        else if (t.pnl < 0) grossLossUsd += t.pnl;
+      }
+    }
     const winRate =
       closedTrades.length > 0
         ? Math.round((wins / closedTrades.length) * 1000) / 10
         : 0;
-    return { netPnl, grossProfit, grossLoss, wins, winRate };
-  }, [closedTrades]);
+    const isInr = market.currency === 'INR';
+    return {
+      netInr,
+      grossProfitInr,
+      grossLossInr,
+      netUsd,
+      grossProfitUsd,
+      grossLossUsd,
+      activeNet: isInr ? netInr : netUsd,
+      activeGrossProfit: isInr ? grossProfitInr : grossProfitUsd,
+      activeGrossLoss: isInr ? grossLossInr : grossLossUsd,
+      activeOpenPnl: isInr ? openPnlByCurrency.inr : openPnlByCurrency.usd,
+      wins,
+      winRate,
+    };
+  }, [closedTrades, market.currency, openPnlByCurrency]);
 
   const filteredLedger = useMemo(() => {
     if (ledgerFilter === 'targets') {
@@ -178,44 +216,50 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
           <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
-            Realized P&amp;L Ledger
+            Realized P&amp;L ({market.currency})
           </p>
-          <div className="mt-1.5 flex items-baseline justify-between">
+          <div className="mt-1.5 flex items-baseline justify-between gap-2">
             <span
               className={`font-mono text-2xl font-semibold tabular-nums ${
-                ledgerSummary.netPnl >= 0
+                ledgerSummary.activeNet >= 0
                   ? 'text-emerald-600 dark:text-emerald-400'
                   : 'text-red-600 dark:text-red-400'
               }`}
             >
-              {ledgerSummary.netPnl >= 0 ? '+' : ''}$
-              {ledgerSummary.netPnl.toLocaleString()}
+              {formatSignedPnl(ledgerSummary.activeNet, market.currency)}
             </span>
             <span className="text-xs text-slate-500 dark:text-slate-400">
               {closedTrades.length} closed
             </span>
           </div>
+          <p className="mt-1 font-mono text-[11px] text-slate-400 tabular-nums">
+            INR {formatSignedPnl(ledgerSummary.netInr, 'INR')} · USD{' '}
+            {formatSignedPnl(ledgerSummary.netUsd, 'USD')}
+          </p>
         </div>
 
         <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
           <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
-            Open Paper PnL
+            Open Paper PnL ({market.currency})
           </p>
-          <div className="mt-1.5 flex items-baseline justify-between">
+          <div className="mt-1.5 flex items-baseline justify-between gap-2">
             <span
               className={`font-mono text-2xl font-semibold tabular-nums ${
-                totalOpenPnl >= 0
+                ledgerSummary.activeOpenPnl >= 0
                   ? 'text-emerald-600 dark:text-emerald-400'
                   : 'text-red-600 dark:text-red-400'
               }`}
             >
-              {totalOpenPnl >= 0 ? '+' : ''}$
-              {Math.round(totalOpenPnl).toLocaleString()}
+              {formatSignedPnl(ledgerSummary.activeOpenPnl, market.currency)}
             </span>
             <span className="text-xs text-slate-500 dark:text-slate-400">
               {openPositions.length} open
             </span>
           </div>
+          <p className="mt-1 font-mono text-[11px] text-slate-400 tabular-nums">
+            INR {formatSignedPnl(openPnlByCurrency.inr, 'INR')} · USD{' '}
+            {formatSignedPnl(openPnlByCurrency.usd, 'USD')}
+          </p>
         </div>
 
         <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
@@ -324,6 +368,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           <CandlestickChart
             rows={rows}
             decimals={market.decimals}
+            currency={market.currency}
             showMaFast={showMaFast}
             showMaSlow={showMaSlow}
             signal={activeSignal.symbol === market.symbol ? activeSignal : null}
@@ -366,12 +411,14 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
               <div className="grid grid-cols-2 gap-2.5 text-xs">
                 <div>
                   <label className="mb-1 block text-[11px] text-slate-500">
-                    Entry Price
+                    Entry Price ({getCurrencySymbol(market.currency)}{' '}
+                    {market.currency})
                   </label>
                   <div className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 font-mono font-medium text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 tabular-nums">
-                    {formatPrice(
+                    {formatCurrencyPrice(
                       activeSignal.entry,
-                      getMarketMeta(activeSignal.symbol).decimals
+                      getMarketMeta(activeSignal.symbol).decimals,
+                      market.currency
                     )}
                   </div>
                 </div>
@@ -392,7 +439,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                 </div>
                 <div>
                   <label className="mb-1 block text-[11px] text-red-600 dark:text-red-400">
-                    Stop Loss
+                    Stop Loss ({getCurrencySymbol(market.currency)})
                   </label>
                   <input
                     type="number"
@@ -404,7 +451,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                 </div>
                 <div>
                   <label className="mb-1 block text-[11px] text-emerald-600 dark:text-emerald-400">
-                    Target 1 (50% Book + Trail)
+                    Target 1 ({getCurrencySymbol(market.currency)} · 50% Book)
                   </label>
                   <input
                     type="number"
@@ -416,7 +463,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                 </div>
                 <div className="col-span-2">
                   <label className="mb-1 block text-[11px] text-emerald-600 dark:text-emerald-400">
-                    Target 2 (Final Exit)
+                    Target 2 ({getCurrencySymbol(market.currency)} · Final Exit)
                   </label>
                   <input
                     type="number"
@@ -564,7 +611,9 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800 tabular-nums">
                 {openPositions.map((pos) => {
-                  const dec = getMarketMeta(pos.symbol).decimals;
+                  const posMeta = getMarketMeta(pos.symbol);
+                  const dec = posMeta.decimals;
+                  const cur = posMeta.currency;
                   const diff =
                     pos.side === 'BUY'
                       ? pos.ltp - pos.entryPrice
@@ -588,26 +637,26 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                           {pos.symbol} · {pos.side}
                         </div>
                         <div className="text-[11px] font-normal text-slate-500">
-                          {pos.broker}
+                          {pos.broker} · {cur}
                           {pos.target1Hit ? ' · T1 Booked (SL at Entry)' : ''}
                         </div>
                       </td>
                       <td className="py-2.5 text-right font-mono">{pos.qty}</td>
                       <td className="py-2.5 text-right font-mono">
-                        {formatPrice(pos.entryPrice, dec)}
+                        {formatCurrencyPrice(pos.entryPrice, dec, cur)}
                       </td>
                       <td className="py-2.5 text-right font-mono font-semibold text-slate-900 dark:text-slate-100">
-                        {formatPrice(pos.ltp, dec)}
+                        {formatCurrencyPrice(pos.ltp, dec, cur)}
                       </td>
                       <td className="py-2.5 text-right font-mono text-red-600 dark:text-red-400">
-                        {formatPrice(pos.stopLoss, dec)}
+                        {formatCurrencyPrice(pos.stopLoss, dec, cur)}
                       </td>
                       <td className="py-2.5 text-right font-mono text-emerald-600 dark:text-emerald-400">
-                        {formatPrice(pos.target1, dec)}
+                        {formatCurrencyPrice(pos.target1, dec, cur)}
                         {pos.target1Hit ? ' ✓' : ''}
                       </td>
                       <td className="py-2.5 text-right font-mono text-emerald-600 dark:text-emerald-400">
-                        {formatPrice(pos.target2, dec)}
+                        {formatCurrencyPrice(pos.target2, dec, cur)}
                       </td>
                       <td
                         className={`py-2.5 text-right font-mono font-semibold ${
@@ -616,7 +665,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                             : 'text-red-600 dark:text-red-400'
                         }`}
                       >
-                        {pnl >= 0 ? '+' : ''}${pnl}
+                        {formatSignedPnl(pnl, cur)}
                       </td>
                       <td className="py-2.5 text-right">
                         <div className="inline-flex items-center gap-1">
@@ -705,28 +754,33 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           {/* Ledger Totals Strip */}
           <div className="mb-4 grid grid-cols-3 gap-4 border-b border-slate-100 pb-3 text-xs dark:border-slate-800 tabular-nums">
             <div>
-              <span className="text-slate-500">Gross Profit</span>
+              <span className="text-slate-500">
+                Gross Profit ({market.currency})
+              </span>
               <p className="mt-0.5 font-mono font-semibold text-emerald-600 dark:text-emerald-400">
-                +${ledgerSummary.grossProfit.toLocaleString()}
+                {formatSignedPnl(ledgerSummary.activeGrossProfit, market.currency)}
               </p>
             </div>
             <div>
-              <span className="text-slate-500">Gross Loss</span>
+              <span className="text-slate-500">
+                Gross Loss ({market.currency})
+              </span>
               <p className="mt-0.5 font-mono font-semibold text-red-600 dark:text-red-400">
-                -${Math.abs(ledgerSummary.grossLoss).toLocaleString()}
+                {formatSignedPnl(ledgerSummary.activeGrossLoss, market.currency)}
               </p>
             </div>
             <div>
-              <span className="text-slate-500">Net Realized P&amp;L</span>
+              <span className="text-slate-500">
+                Net Realized ({market.currency})
+              </span>
               <p
                 className={`mt-0.5 font-mono font-semibold ${
-                  ledgerSummary.netPnl >= 0
+                  ledgerSummary.activeNet >= 0
                     ? 'text-emerald-600 dark:text-emerald-400'
                     : 'text-red-600 dark:text-red-400'
                 }`}
               >
-                {ledgerSummary.netPnl >= 0 ? '+' : ''}$
-                {ledgerSummary.netPnl.toLocaleString()}
+                {formatSignedPnl(ledgerSummary.activeNet, market.currency)}
               </p>
             </div>
           </div>
@@ -745,7 +799,9 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800 tabular-nums">
                 {filteredLedger.map((t) => {
-                  const dec = getMarketMeta(t.symbol).decimals;
+                  const tMeta = getMarketMeta(t.symbol);
+                  const dec = tMeta.decimals;
+                  const cur = tMeta.currency;
                   return (
                     <tr
                       key={t.id}
@@ -756,15 +812,15 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                           {t.symbol} · {t.side}
                         </div>
                         <div className="font-mono text-[10px] text-slate-400">
-                          {t.closedAt}
+                          {t.closedAt} · {cur}
                         </div>
                       </td>
                       <td className="py-2.5 text-right font-mono">{t.qty}</td>
                       <td className="py-2.5 text-right font-mono">
-                        {formatPrice(t.entryPrice, dec)}
+                        {formatCurrencyPrice(t.entryPrice, dec, cur)}
                       </td>
                       <td className="py-2.5 text-right font-mono">
-                        {formatPrice(t.exitPrice, dec)}
+                        {formatCurrencyPrice(t.exitPrice, dec, cur)}
                       </td>
                       <td className="py-2.5 pl-3">
                         <span
@@ -786,9 +842,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                             : 'text-red-600 dark:text-red-400'
                         }`}
                       >
-                        <div>
-                          {t.pnl >= 0 ? '+' : ''}${t.pnl.toLocaleString()}
-                        </div>
+                        <div>{formatSignedPnl(t.pnl, cur)}</div>
                         <div className="text-[10px] font-normal">
                           {t.pnlPct >= 0 ? '+' : ''}
                           {t.pnlPct}%
@@ -833,6 +887,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
               data={filteredEquity}
               primaryLabel={`Strategy (${activeVersion.version})`}
               secondaryLabel="Buy & Hold"
+              currency={market.currency}
               height={175}
             />
           </div>

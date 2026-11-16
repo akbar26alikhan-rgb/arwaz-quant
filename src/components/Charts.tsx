@@ -6,11 +6,12 @@ import {
   SensitivityCell,
   TradeSignal,
 } from '../types/trading';
-import { formatPrice } from '../engine/marketData';
+import { formatCurrencyPrice, getCurrencySymbol } from '../engine/marketData';
 
 interface CandlestickChartProps {
   rows: EngineeredRow[];
   decimals: number;
+  currency?: string;
   showMaFast: boolean;
   showMaSlow: boolean;
   signal?: TradeSignal | null;
@@ -20,6 +21,7 @@ interface CandlestickChartProps {
 export const CandlestickChart: React.FC<CandlestickChartProps> = ({
   rows,
   decimals,
+  currency = 'USD',
   showMaFast,
   showMaSlow,
   signal,
@@ -38,7 +40,7 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
 
   const width = 880;
   const padLeft = 16;
-  const padRight = 84;
+  const padRight = 98;
   const padTop = 20;
   const padBottom = 34;
   const volHeight = 46;
@@ -97,22 +99,22 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
           {activeRow.date}
         </span>
         <span>
-          O <strong className="font-mono font-medium text-slate-900 dark:text-slate-100">{formatPrice(activeRow.open, decimals)}</strong>
+          O <strong className="font-mono font-medium text-slate-900 dark:text-slate-100">{formatCurrencyPrice(activeRow.open, decimals, currency)}</strong>
         </span>
         <span>
-          H <strong className="font-mono font-medium text-slate-900 dark:text-slate-100">{formatPrice(activeRow.high, decimals)}</strong>
+          H <strong className="font-mono font-medium text-slate-900 dark:text-slate-100">{formatCurrencyPrice(activeRow.high, decimals, currency)}</strong>
         </span>
         <span>
-          L <strong className="font-mono font-medium text-slate-900 dark:text-slate-100">{formatPrice(activeRow.low, decimals)}</strong>
+          L <strong className="font-mono font-medium text-slate-900 dark:text-slate-100">{formatCurrencyPrice(activeRow.low, decimals, currency)}</strong>
         </span>
         <span>
-          C <strong className={`font-mono font-medium ${activeRow.close >= activeRow.open ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>{formatPrice(activeRow.close, decimals)}</strong>
+          C <strong className={`font-mono font-medium ${activeRow.close >= activeRow.open ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>{formatCurrencyPrice(activeRow.close, decimals, currency)}</strong>
         </span>
         <span>
           RSI <strong className="font-mono font-medium">{activeRow.rsi ?? '—'}</strong>
         </span>
         <span>
-          ATR <strong className="font-mono font-medium">{activeRow.atr !== null ? formatPrice(activeRow.atr, decimals) : '—'}</strong>
+          ATR <strong className="font-mono font-medium">{activeRow.atr !== null ? formatCurrencyPrice(activeRow.atr, decimals, currency) : '—'}</strong>
         </span>
         <span>
           Regime <strong className="font-medium text-slate-800 dark:text-slate-200">{activeRow.regime}</strong>
@@ -141,7 +143,7 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
               y={t.y + 4}
               className="fill-slate-500 dark:fill-slate-400 text-[10px] font-mono tabular-nums"
             >
-              {formatPrice(t.price, decimals)}
+              {formatCurrencyPrice(t.price, decimals, currency)}
             </text>
           </g>
         ))}
@@ -171,7 +173,7 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
                   <rect
                     x={width - padRight + 4}
                     y={y - 9}
-                    width={76}
+                    width={92}
                     height={18}
                     rx={3}
                     fill={lvl.color}
@@ -179,9 +181,9 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
                   <text
                     x={width - padRight + 8}
                     y={y + 3}
-                    className="fill-white text-[9.5px] font-mono font-semibold tabular-nums"
+                    className="fill-white text-[9px] font-mono font-semibold tabular-nums"
                   >
-                    {lvl.label} {formatPrice(lvl.price, decimals)}
+                    {lvl.label} {formatCurrencyPrice(lvl.price, decimals, currency)}
                   </text>
                 </g>
               );
@@ -330,6 +332,7 @@ interface DualEquityChartProps {
   data: EquityPoint[];
   primaryLabel: string;
   secondaryLabel: string;
+  currency?: string;
   height?: number;
 }
 
@@ -337,8 +340,11 @@ export const DualEquityChart: React.FC<DualEquityChartProps> = ({
   data,
   primaryLabel,
   secondaryLabel,
+  currency = 'USD',
   height = 220,
 }) => {
+  const sym = getCurrencySymbol(currency);
+  const locale = currency === 'INR' ? 'en-IN' : 'en-US';
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   if (data.length < 2) {
     return (
@@ -393,8 +399,9 @@ export const DualEquityChart: React.FC<DualEquityChartProps> = ({
           </span>
         </div>
         <div className="font-mono text-slate-700 dark:text-slate-300 tabular-nums">
-          {active.label} · ${active.strategy.toLocaleString()} vs $
-          {active.benchmark.toLocaleString()}
+          {active.label} · {sym}
+          {active.strategy.toLocaleString(locale)} vs {sym}
+          {active.benchmark.toLocaleString(locale)}
         </div>
       </div>
 
@@ -418,6 +425,7 @@ export const DualEquityChart: React.FC<DualEquityChartProps> = ({
               y={t.y + 4}
               className="fill-slate-500 dark:fill-slate-400 text-[10px] font-mono tabular-nums"
             >
+              {sym}
               {Math.round(t.val / 1000)}k
             </text>
           </g>
@@ -525,8 +533,10 @@ export const DrawdownChart: React.FC<{ data: EquityPoint[] }> = ({ data }) => {
 export const MonteCarloChart: React.FC<{
   paths: number[][];
   median: number[];
-}> = ({ paths, median }) => {
+  currency?: string;
+}> = ({ paths, median, currency = 'USD' }) => {
   if (paths.length === 0) return null;
+  const sym = getCurrencySymbol(currency);
   const width = 380;
   const height = 160;
   const padLeft = 10;
@@ -565,7 +575,8 @@ export const MonteCarloChart: React.FC<{
               y={y + 3}
               className="fill-slate-500 dark:fill-slate-400 text-[9.5px] font-mono tabular-nums"
             >
-              ${Math.round(v / 1000)}k
+              {sym}
+              {Math.round(v / 1000)}k
             </text>
           </g>
         );
