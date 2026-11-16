@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Pause,
   Play,
+  RefreshCw,
   ShieldCheck,
   TrendingUp,
   XCircle,
@@ -44,6 +45,8 @@ interface OverviewViewProps {
   ) => void;
   onSimulateTrigger: (id: string, trigger: 'SL' | 'T1' | 'T2') => void;
   onSimulateMarketTick: () => void;
+  onSyncLiveFeed: () => void;
+  syncingLiveFeed: boolean;
   autoExitEnabled: boolean;
   onToggleAutoExit: (next: boolean) => void;
   autoTickEnabled: boolean;
@@ -76,6 +79,8 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   onClosePosition,
   onSimulateTrigger,
   onSimulateMarketTick,
+  onSyncLiveFeed,
+  syncingLiveFeed,
   autoExitEnabled,
   onToggleAutoExit,
   autoTickEnabled,
@@ -277,6 +282,17 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                 }`}
               >
                 MA 50
+              </button>
+              <button
+                type="button"
+                onClick={onSyncLiveFeed}
+                disabled={syncingLiveFeed}
+                className="inline-flex items-center gap-1.5 rounded-md border border-emerald-600/40 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-60 dark:border-emerald-500/40 dark:bg-emerald-950/40 dark:text-emerald-300 dark:hover:bg-emerald-950/70 whitespace-nowrap shrink-0"
+              >
+                <RefreshCw
+                  className={`h-3.5 w-3.5 ${syncingLiveFeed ? 'animate-spin' : ''}`}
+                />
+                Sync Live
               </button>
               <button
                 type="button"

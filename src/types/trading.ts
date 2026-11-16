@@ -275,3 +275,40 @@ export interface StrategyVersion {
   config: BacktestConfig;
   notes: string;
 }
+
+export type McpTransportMode = 'stdio' | 'streamable-http' | 'sse';
+
+export interface McpToolSummary {
+  name: string;
+  description: string;
+  inputSchema?: Record<string, unknown>;
+}
+
+export interface McpConnectionState {
+  status: 'disconnected' | 'connecting' | 'connected' | 'error';
+  mode: McpTransportMode;
+  targetLabel: string;
+  remoteUrl: string;
+  serverName: string;
+  serverVersion: string;
+  toolCount: number;
+  tools: McpToolSummary[];
+  lastError: string | null;
+  connectedAt: string | null;
+}
+
+export interface NseSnapshot {
+  fetchedAt: string;
+  marketStatus: Array<Record<string, unknown>>;
+  indices: Array<Record<string, unknown>>;
+}
+
+export interface McpToolExecutionResult {
+  ok: boolean;
+  toolName: string;
+  durationMs: number;
+  isError: boolean;
+  data: unknown;
+  rawText: string;
+  error?: string;
+}

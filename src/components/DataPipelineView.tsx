@@ -7,10 +7,14 @@ import {
   EngineeredRow,
   FeatureConfig,
   MarketMeta,
+  McpConnectionState,
+  McpTransportMode,
+  NseSnapshot,
   Timeframe,
 } from '../types/trading';
 import { formatPrice } from '../engine/marketData';
 import { NseBhavcopyPanel } from './NseBhavcopyPanel';
+import { NseMcpPanel } from './NseMcpPanel';
 
 interface DataPipelineViewProps {
   market: MarketMeta;
@@ -29,6 +33,12 @@ interface DataPipelineViewProps {
   engineeredRows: EngineeredRow[];
   onSendToAgent: () => void;
   onSelectBhavcopyStock: (row: BhavcopyRow) => void;
+  mcpConnection: McpConnectionState | null;
+  nseSnapshot: NseSnapshot | null;
+  mcpLoading: boolean;
+  onRefreshMcp: () => void;
+  onConnectMcp: (mode: McpTransportMode, url?: string) => Promise<void>;
+  onSelectSymbolFromMcp: (symbol: string) => void;
 }
 
 export const DataPipelineView: React.FC<DataPipelineViewProps> = ({
@@ -43,10 +53,17 @@ export const DataPipelineView: React.FC<DataPipelineViewProps> = ({
   engineeredRows,
   onSendToAgent,
   onSelectBhavcopyStock,
+  mcpConnection,
+  nseSnapshot,
+  mcpLoading,
+  onRefreshMcp,
+  onConnectMcp,
+  onSelectSymbolFromMcp,
 }) => {
   const [selectedSource, setSelectedSource] = useState<
     'Zerodha' | 'Dhan' | 'MT5' | 'Binance'
   >('Zerodha');
+  const [feedSubTab, setFeedSubTab] = useState<'mcp' | 'bhavcopy'>('mcp');
   const [showCode, setShowCode] = useState(false);
 
   const previewRows = useMemo(() => engineeredRows.slice(-8).reverse(), [engineeredRows]);
@@ -111,13 +128,58 @@ klines = client.get_historical_klines(
         </div>
       </div>
 
-      {/* Live NSE Bhavcopy Table */}
-      <div className="rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-        <NseBhavcopyPanel
-          activeSymbol={market.symbol}
-          onSelectStock={onSelectBhavcopyStock}
-          compact
-        />
+      {/* Live NSE MCP Server & Bhavcopy Feed Tabs */}
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="inline-flex rounded-md bg-slate-200/70 p-1 dark:bg-slate-800">
+            <button
+              type="button"
+              onClick={() => setFeedSubTab('mcp')}
+              className={`rounded px-3 py-1.5 text-xs font-medium transition-colors ${
+                feedSubTab === 'mcp'
+                  ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-900 dark:text-white'
+                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white'
+              }`}
+            >
+              NSE MCP Server (Live)
+            </button>
+            <button
+              type="button"
+              onClick={() => setFeedSubTab('bhavcopy')}
+              className={`rounded px-3 py-1.5 text-xs font-medium transition-colors ${
+                feedSubTab === 'bhavcopy'
+                  ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-900 dark:text-white'
+                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white'
+              }`}
+            >
+              NSE Bhavcopy Archive (EOD)
+            </button>
+          </div>
+          <span className="text-xs text-slate-500 dark:text-slate-400">
+            {mcpConnection?.status === 'connected'
+              ? `MCP Active · ${mcpConnection.toolCount} tools`
+              : 'MCP standby'}
+          </span>
+        </div>
+
+        {feedSubTab === 'mcp' ? (
+          <NseMcpPanel
+            connection={mcpConnection}
+            snapshot={nseSnapshot}
+            loading={mcpLoading}
+            onRefresh={onRefreshMcp}
+            onConnect={onConnectMcp}
+            onSelectIndexSymbol={onSelectSymbolFromMcp}
+          />
+        ) : (
+          <div className="rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+            <NseBhavcopyPanel
+              activeSymbol={market.symbol}
+              onSelectStock={onSelectBhavcopyStock}
+              compact
+            />
+          </div>
+        )}
       </div>
 
       {/* Stage 1 & 2: Sources + Cleaning */}

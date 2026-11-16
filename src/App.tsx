@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BookOpen, Database, Moon, Sun, X } from 'lucide-react';
+import { BookOpen, Database, Moon, Server, Sun, X } from 'lucide-react';
 import {
   ActiveTab,
   BacktestConfig,
@@ -13,6 +13,9 @@ import {
   MarketCategory,
   MarketMeta,
   MarketSymbol,
+  McpConnectionState,
+  McpTransportMode,
+  NseSnapshot,
   OpenPosition,
   RiskSettings,
   StrategyVersion,
@@ -41,6 +44,7 @@ import { BacktestView } from './components/BacktestView';
 import { SelfImproveView } from './components/SelfImproveView';
 import { ArchitectureModal } from './components/ArchitectureModal';
 import { NseBhavcopyPanel } from './components/NseBhavcopyPanel';
+import { NseMcpPanel } from './components/NseMcpPanel';
 
 function buildDefaultSignal(
   symbol: MarketSymbol,
@@ -113,6 +117,14 @@ export default function App() {
   const [broker, setBroker] = useState<BrokerName>('Zerodha Kite');
   const [guideOpen, setGuideOpen] = useState(false);
   const [bhavcopyModalOpen, setBhavcopyModalOpen] = useState(false);
+  const [mcpModalOpen, setMcpModalOpen] = useState(false);
+  const [mcpConnection, setMcpConnection] = useState<McpConnectionState | null>(
+    null
+  );
+  const [nseSnapshot, setNseSnapshot] = useState<NseSnapshot | null>(null);
+  const [mcpLoading, setMcpLoading] = useState(false);
+  const [syncingLiveFeed, setSyncingLiveFeed] = useState(false);
+  const [feedRefreshNonce, setFeedRefreshNonce] = useState(0);
 
   const [customMarkets, setCustomMarkets] = useState<
     Record<string, Partial<MarketMeta>>
@@ -201,9 +213,49 @@ export default function App() {
     return base;
   }, [category, market]);
 
+  const fetchMcpStatus = async (forceRefresh = false) => {
+    setMcpLoading(true);
+    try {
+      const resp = await fetch(
+        `/api/mcp/nse/status?snapshot=true&refresh=${forceRefresh ? 'true' : 'false'}`
+      );
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data.connection) setMcpConnection(data.connection);
+      if (data.snapshot) setNseSnapshot(data.snapshot);
+    } catch {
+      // ignore transient network errors
+    } finally {
+      setMcpLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchMcpStatus(false);
+  }, []);
+
+  const handleConnectMcp = async (mode: McpTransportMode, url?: string) => {
+    setMcpLoading(true);
+    try {
+      const resp = await fetch('/api/mcp/nse/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode, url }),
+      });
+      const data = await resp.json();
+      if (data.connection) setMcpConnection(data.connection);
+      if (data.snapshot) setNseSnapshot(data.snapshot);
+      if (resp.ok) {
+        setFeedRefreshNonce((n) => n + 1);
+      }
+    } finally {
+      setMcpLoading(false);
+    }
+  };
+
   const feedKey = `${category}:${symbol}:${timeframe}`;
 
-  // Fetch real live candles (Binance Crypto, Frankfurter FX, NSE Bhavcopy) when market changes
+  // Fetch real live candles (NSE MCP, Binance Crypto, Frankfurter FX, NSE Bhavcopy) when market changes
   useEffect(() => {
     let cancelled = false;
     async function loadLiveMarket() {
@@ -258,7 +310,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [category, symbol, timeframe, feedKey]);
+  }, [category, symbol, timeframe, feedKey, feedRefreshNonce]);
 
   const rawCandles = useMemo(() => {
     const live = liveCandlesByKey[feedKey];
@@ -316,7 +368,9 @@ export default function App() {
   const feedSourceLabel =
     feedSourceByKey[feedKey] ||
     (category === 'indian_stock'
-      ? 'NSE Bhavcopy · Calibrated History'
+      ? mcpConnection?.status === 'connected'
+        ? `NSE MCP Live · ${symbol}`
+        : 'NSE Bhavcopy · Calibrated History'
       : 'Calibrated Market Feed');
 
   const cleaningResult = useMemo(
@@ -584,6 +638,49 @@ export default function App() {
     processPositionsWithTriggers(updated);
   };
 
+  const handleSyncLiveFeed = async () => {
+    setSyncingLiveFeed(true);
+    try {
+      setFeedRefreshNonce((n) => n + 1);
+      if (category === 'indian_stock') {
+        await fetchMcpStatus(true);
+      }
+      const nsePositions = openPositions.filter(
+        (p) => getMarketMeta(p.symbol, customMarkets[p.symbol]).category === 'indian_stock'
+      );
+      if (nsePositions.length > 0) {
+        const quotes = await Promise.all(
+          nsePositions.map(async (p) => {
+            try {
+              const r = await fetch(
+                `/api/mcp/nse/live-quote?symbol=${encodeURIComponent(p.symbol)}`
+              );
+              if (!r.ok) return null;
+              const d = await r.json();
+              return d.latestPrice ? { symbol: p.symbol, price: Number(d.latestPrice) } : null;
+            } catch {
+              return null;
+            }
+          })
+        );
+        const priceMap = new Map<string, number>();
+        for (const q of quotes) {
+          if (q && Number.isFinite(q.price) && q.price > 0) {
+            priceMap.set(q.symbol, q.price);
+          }
+        }
+        if (priceMap.size > 0) {
+          const next = openPositions.map((pos) =>
+            priceMap.has(pos.symbol) ? { ...pos, ltp: priceMap.get(pos.symbol)! } : pos
+          );
+          processPositionsWithTriggers(next);
+        }
+      }
+    } finally {
+      setSyncingLiveFeed(false);
+    }
+  };
+
   useEffect(() => {
     if (!autoTickEnabled || openPositions.length === 0) return;
     const timer = setInterval(() => {
@@ -837,14 +934,30 @@ export default function App() {
             </div>
 
             {category === 'indian_stock' && (
-              <button
-                type="button"
-                onClick={() => setBhavcopyModalOpen(true)}
-                className="inline-flex items-center gap-1.5 rounded-md border border-orange-600/40 bg-orange-50 px-3 py-1 text-xs font-medium text-orange-800 hover:bg-orange-100 dark:border-orange-500/40 dark:bg-orange-950/40 dark:text-orange-300 dark:hover:bg-orange-950/70 whitespace-nowrap shrink-0"
-              >
-                <Database className="h-3.5 w-3.5" />
-                Browse All NSE Bhavcopy Stocks
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setMcpModalOpen(true)}
+                  className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1 text-xs font-medium whitespace-nowrap shrink-0 transition-colors ${
+                    mcpConnection?.status === 'connected'
+                      ? 'border-emerald-600/40 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 dark:border-emerald-500/40 dark:bg-emerald-950/40 dark:text-emerald-300 dark:hover:bg-emerald-950/70'
+                      : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                  }`}
+                >
+                  <Server className="h-3.5 w-3.5" />
+                  {mcpConnection?.status === 'connected'
+                    ? `NSE MCP Connected (${mcpConnection.toolCount} Tools)`
+                    : 'Connect NSE MCP Server'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBhavcopyModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-orange-600/40 bg-orange-50 px-3 py-1 text-xs font-medium text-orange-800 hover:bg-orange-100 dark:border-orange-500/40 dark:bg-orange-950/40 dark:text-orange-300 dark:hover:bg-orange-950/70 whitespace-nowrap shrink-0"
+                >
+                  <Database className="h-3.5 w-3.5" />
+                  Browse All NSE Bhavcopy Stocks
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -872,6 +985,8 @@ export default function App() {
             onUpdatePositionLevels={handleUpdatePositionLevels}
             onSimulateTrigger={handleSimulateTrigger}
             onSimulateMarketTick={handleSimulateMarketTick}
+            onSyncLiveFeed={handleSyncLiveFeed}
+            syncingLiveFeed={syncingLiveFeed}
             autoExitEnabled={autoExitEnabled}
             onToggleAutoExit={setAutoExitEnabled}
             autoTickEnabled={autoTickEnabled}
@@ -897,6 +1012,16 @@ export default function App() {
             engineeredRows={engineeredRows}
             onSendToAgent={() => setActiveTab('agent')}
             onSelectBhavcopyStock={handleSelectBhavcopyStock}
+            mcpConnection={mcpConnection}
+            nseSnapshot={nseSnapshot}
+            mcpLoading={mcpLoading}
+            onRefreshMcp={() => fetchMcpStatus(true)}
+            onConnectMcp={handleConnectMcp}
+            onSelectSymbolFromMcp={(nextSym) => {
+              setCategory('indian_stock');
+              handleSelectSymbol(nextSym);
+              setActiveTab('overview');
+            }}
           />
         )}
 
@@ -941,15 +1066,59 @@ export default function App() {
       <footer className="border-t border-slate-200 bg-white py-5 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
         <div className="mx-auto flex max-w-[1400px] flex-wrap items-center justify-between gap-4 px-4 sm:px-6">
           <span>
-            Arwaz Quant · Indian Stocks (NSE Bhavcopy), Crypto, Forex & Global Assets
+            Arwaz Quant · Indian Stocks (NSE MCP + Bhavcopy), Crypto, Forex & Global Assets
           </span>
           <span>
-            Brokers & Feeds: NSE Bhavcopy · Binance · Frankfurter FX · Zerodha · Dhan · MetaTrader 5 · IBKR
+            Brokers & Feeds: NSE MCP Server · NSE Bhavcopy · Binance · Frankfurter FX · Zerodha · Dhan · MT5 · IBKR
           </span>
         </div>
       </footer>
 
       <ArchitectureModal open={guideOpen} onClose={() => setGuideOpen(false)} />
+
+      {/* Live NSE MCP Server Console Modal */}
+      {mcpModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="NSE MCP Server Console"
+        >
+          <div className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-6 shadow-xl dark:border-slate-800 dark:bg-slate-950">
+            <div className="mb-4 flex items-center justify-between border-b border-slate-200 pb-3 dark:border-slate-800">
+              <div>
+                <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                  NSE MCP Server Live Connection & Tool Explorer
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Connected via Model Context Protocol for live NSE market status, indices, option chains, ETFs, and corporate data
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMcpModalOpen(false)}
+                aria-label="Close NSE MCP console"
+                className="rounded-md border border-slate-200 p-1.5 text-slate-500 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <NseMcpPanel
+              connection={mcpConnection}
+              snapshot={nseSnapshot}
+              loading={mcpLoading}
+              onRefresh={() => fetchMcpStatus(true)}
+              onConnect={handleConnectMcp}
+              onSelectIndexSymbol={(nextSym) => {
+                setCategory('indian_stock');
+                handleSelectSymbol(nextSym);
+                setMcpModalOpen(false);
+                setActiveTab('overview');
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Full NSE Bhavcopy Stock Browser Modal */}
       {bhavcopyModalOpen && (

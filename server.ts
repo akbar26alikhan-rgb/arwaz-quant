@@ -4,12 +4,21 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import AdmZip from 'adm-zip';
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
+import {
+  callNseMcpTool,
+  connectNseMcp,
+  ensureNseMcpConnected,
+  getLiveIndianMarketData,
+  getLiveNseSnapshot,
+  getNseMcpState,
+  McpTransportMode,
+} from './server/nseMcp.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PORT = Number(process.env.PORT || 3000);
 const isProduction = process.env.NODE_ENV === 'production';
+const PORT = isProduction ? Number(process.env.PORT || 3000) : 3000;
 
 interface BhavcopyItem {
   symbol: string;
@@ -325,13 +334,41 @@ async function startServer() {
         regime: row.regime,
       }));
 
+      let mcpContextBlock = '';
+      if (String(exchange || '').toUpperCase() === 'NSE') {
+        try {
+          const snapshot = await getLiveNseSnapshot(false);
+          if (snapshot) {
+            const cap = snapshot.marketStatus.find(
+              (m) => String(m.market || '').toLowerCase() === 'capital market'
+            );
+            const keyIdx = snapshot.indices
+              .filter((r) =>
+                ['NIFTY 50', 'NIFTY BANK', 'INDIA VIX'].includes(
+                  String(r.indexSymbol || r.index || '').toUpperCase()
+                )
+              )
+              .map((r) => ({
+                index: r.indexSymbol || r.index,
+                last: r.last,
+                percentChange: r.percentChange,
+                high: r.high,
+                low: r.low,
+              }));
+            mcpContextBlock = `\nLive NSE MCP Market Snapshot (${snapshot.fetchedAt}):\nMarket Status: ${JSON.stringify(cap ?? {})}\nKey NSE Indices: ${JSON.stringify(keyIdx)}\n`;
+          }
+        } catch {
+          // Proceed cleanly without MCP enrichment if transient
+        }
+      }
+
       const prompt = `You are an institutional quantitative trading agent analyzing ${symbol} (${exchange}) on the ${timeframe} timeframe.
 Strategy Mode: ${strategyMode || 'Trend + Momentum'}
 Target Risk Per Trade: ${riskPerTradePct || 1}%
 Macro & News Context: ${macroContext || 'Normal market conditions, no high-impact surprise events.'}
 Latest Close Price: ${lastCandle.close}
 Latest ATR(14): ${lastCandle.atr ?? 'N/A'}
-
+${mcpContextBlock}
 Recent engineered market context (last 15 bars):
 ${JSON.stringify(condensedRows)}
 
@@ -657,6 +694,22 @@ Return a structured proposal with proposedVersion (increment minor version), sum
       }
 
       if (category === 'indian_stock' && symbol) {
+        const liveNse = await getLiveIndianMarketData(symbol, timeframe);
+        if (liveNse.candles.length > 0) {
+          res.json({
+            source: liveNse.source,
+            sourceLabel: liveNse.sourceLabel,
+            latestPrice: liveNse.latestPrice,
+            prevClose: liveNse.prevClose,
+            changePct: liveNse.changePct,
+            marketState: liveNse.marketState,
+            tradeDate: liveNse.tradeDate,
+            mcpQuote: liveNse.mcpQuote,
+            candles: liveNse.candles,
+          });
+          return;
+        }
+
         const latest = await getLatestNseBhavcopy();
         if (latest) {
           const match = latest.rows.find((r) => r.symbol === symbol);
@@ -687,6 +740,94 @@ Return a structured proposal with proposedVersion (increment minor version), sum
     }
   });
 
+  // NSE MCP Server endpoints
+  app.get('/api/mcp/nse/status', async (req, res) => {
+    try {
+      const includeSnapshot = req.query.snapshot !== 'false';
+      const conn = await ensureNseMcpConnected();
+      const snapshot =
+        includeSnapshot && conn.status === 'connected'
+          ? await getLiveNseSnapshot(req.query.refresh === 'true')
+          : null;
+      res.json({
+        connection: conn,
+        snapshot,
+      });
+    } catch (error) {
+      res.status(500).json({
+        error: error instanceof Error ? error.message : 'Failed to read NSE MCP status.',
+        connection: getNseMcpState(),
+      });
+    }
+  });
+
+  app.post('/api/mcp/nse/connect', async (req, res) => {
+    try {
+      const mode = (req.body?.mode || 'stdio') as McpTransportMode;
+      const url = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
+      if (mode !== 'stdio' && !url) {
+        res.status(400).json({ error: 'Please provide an NSE MCP server URL.' });
+        return;
+      }
+      const conn = await connectNseMcp({ mode, url });
+      const snapshot =
+        conn.status === 'connected' ? await getLiveNseSnapshot(true) : null;
+      res.status(conn.status === 'connected' ? 200 : 502).json({
+        connection: conn,
+        snapshot,
+      });
+    } catch (error) {
+      res.status(500).json({
+        error: error instanceof Error ? error.message : 'Failed to connect NSE MCP server.',
+        connection: getNseMcpState(),
+      });
+    }
+  });
+
+  app.post('/api/mcp/nse/call', async (req, res) => {
+    try {
+      const toolName = String(req.body?.toolName || '').trim();
+      const args =
+        req.body?.args && typeof req.body.args === 'object'
+          ? (req.body.args as Record<string, unknown>)
+          : {};
+      if (!toolName) {
+        res.status(400).json({ error: 'Missing MCP toolName.' });
+        return;
+      }
+      const result = await callNseMcpTool(toolName, args);
+      res.json(result);
+    } catch (error) {
+      res.status(502).json({
+        ok: false,
+        error: error instanceof Error ? error.message : 'Failed to execute NSE MCP tool.',
+      });
+    }
+  });
+
+  app.get('/api/mcp/nse/live-quote', async (req, res) => {
+    try {
+      const symbol = String(req.query.symbol || 'RELIANCE').trim().toUpperCase();
+      const data = await getLiveIndianMarketData(symbol, '15m');
+      res.json({
+        symbol,
+        source: data.source,
+        sourceLabel: data.sourceLabel,
+        latestPrice: data.latestPrice,
+        prevClose: data.prevClose,
+        changePct: data.changePct,
+        marketState: data.marketState,
+        tradeDate: data.tradeDate,
+        latestBar:
+          data.candles.length > 0 ? data.candles[data.candles.length - 1] : null,
+      });
+    } catch (error) {
+      res.status(500).json({
+        error: error instanceof Error ? error.message : 'Failed to fetch live NSE quote.',
+      });
+    }
+  });
+
   if (isProduction) {
     const distDir = path.join(__dirname, 'dist');
     app.use(express.static(distDir));
@@ -704,6 +845,8 @@ Return a structured proposal with proposedVersion (increment minor version), sum
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Arwaz Quant server listening on http://0.0.0.0:${PORT}`);
+    // Pre-connect built-in NSE MCP Server in background
+    ensureNseMcpConnected().catch(() => {});
   });
 }
 
